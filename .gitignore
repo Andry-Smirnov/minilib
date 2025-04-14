@@ -10,6 +10,7 @@ ref
 *.local
 *.dsk
 /lib/doc
+/lib/backup
 /reports/source/delphi
 /pos/delphi/demo
 Win32
