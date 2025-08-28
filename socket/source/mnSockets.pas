@@ -56,8 +56,9 @@ type
   TmnsoOption = (
     soReuseAddr,
     soKeepAlive,
-    soNagle, //TODO
-    soNoDelay, //deprecated, Nagle's algorithm use it for faster communication, do not wait until ACK for previously sent data and accumulate data in send buffer...
+    soNagle, //Nagle's algorithm use it for faster communication, do not wait until ACK for previously sent data and accumulate data in send buffer...
+             // We always pass TCP_NODELAY option until you use this option
+    //soNoDelay, //deprecated, Nagle's algorithm use it for faster communication, do not wait until ACK for previously sent data and accumulate data in send buffer...
     //soOOBINLINE todo SO_OOBINLINE = 10;
     soQuickAck, //SIO_TCP_SET_ACK_FREQUENCY fo windows, TCP_QUICKACK for Linux
     //soCORK, //not exist in windows //Don't send any data (partial frames) smaller than the MSS until the application says so or until 200ms later; is opposite of soNoDelay. The former forces packet-accumulation delay
@@ -159,6 +160,7 @@ type
     procedure Accept(ListenerHandle: TSocketHandle; Options: TmnsoOptions; ReadTimeout: Integer; out vSocket: TmnCustomSocket; out vErr: Integer); virtual; abstract;
     //Connect used by clients
     procedure Connect(Options: TmnsoOptions; ConnectTimeout, ReadTimeout: Integer; const Port: string; const Address: string; const BindAddress: string; out vSocket: TmnCustomSocket; out vErr: Integer); overload; virtual; abstract;
+    function Connect(const Address: string; const Port: string; const BindAddress: string; out vErr: Integer; Options: TmnsoOptions = []; ConnectTimeout: Integer = cConnectTimeout; ReadTimeout: Integer = cReadTimeout): TmnCustomSocket; overload;
     function ResolveIP(const Address: string): string; virtual;
   end;
 
@@ -193,6 +195,8 @@ type
     procedure Disconnect; override;
     function WaitToRead(vTimeout: Longint): TmnConnectionError; override; //select
     function WaitToWrite(vTimeout: Longint): TmnConnectionError; override; //select
+    //This will peek raw data not OpenSSL data
+    function Peek(var Buffer; var Count: Longint): Boolean; override;
     property Socket: TmnCustomSocket read FSocket;
     property Options: TmnsoOptions read FOptions write FOptions;
   end;
@@ -230,6 +234,11 @@ begin
 end;
 
 { TmnCustomWallSocket }
+
+function TmnCustomWallSocket.Connect(const Address, Port, BindAddress: string; out vErr: Integer; Options: TmnsoOptions; ConnectTimeout, ReadTimeout: Integer): TmnCustomSocket;
+begin
+  Connect(Options, ConnectTimeout, ReadTimeout, Port, Address, BindAddress, Result, vErr);
+end;
 
 constructor TmnCustomWallSocket.Create;
 begin
@@ -497,10 +506,15 @@ begin
   end;
 end;
 
+function TmnSocketStream.Peek(var Buffer; var Count: Longint): Boolean;
+begin
+  Result := Socket.Peek(Buffer, Count) in [erSuccess, erTimeout];
+end;
+
 procedure TmnSocketStream.Prepare;
 begin
   Socket.Prepare;
-  inherited Prepare;
+  inherited;
 end;
 
 function TmnSocketStream.DoWrite(const Buffer; Count: Longint): Longint;
@@ -666,10 +680,7 @@ begin
   if Socket.SSL.Active then //testing
   begin
     if Socket.SSL.Pending then
-    begin
-      Result := cerSuccess;
-      exit;
-    end;
+      exit(cerSuccess);
   end;
 
   err := Socket.Select(vTimeout, slRead);

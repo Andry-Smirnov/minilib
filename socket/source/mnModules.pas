@@ -1,6 +1,12 @@
 ﻿unit mnModules;
-{$M+}{$H+}
-{$IFDEF FPC}{$MODE delphi}{$ENDIF}
+{$IFDEF FPC}
+{$mode delphi}
+{$modeswitch prefixedattributes}
+{$modeswitch arrayoperators}
+{$modeswitch arraytodynarray}
+{$modeswitch functionreferences}{$modeswitch anonymousfunctions}
+{$ENDIF}
+{$H+}{$M+}
 {**
  *  This file is part of the "Mini Library"
  *
@@ -26,22 +32,29 @@
   https://en.wikipedia.org/wiki/Uniform_Resource_Identifier
 
   REST tools
-  https://resttesttest.com
-  https://httpbin.org
-  http://dummy.restapiexample.com/
+    https://resttesttest.com
+    https://httpbin.org
+    http://dummy.restapiexample.com/
+
+  echo
+    ws://ws.vi-server.org/mirror
 }
 
 interface
 
 uses
-  SysUtils, Classes, StrUtils, Types, DateUtils, ZLib, 
+  SysUtils, Classes, StrUtils, Types, DateUtils, {$ifdef FPC}ZStream,{$else}ZLib,{$endif}
   Generics.Defaults, mnStreamUtils, SyncObjs,
-  mnClasses, mnStreams, mnFields, mnParams,
+  mnClasses, mnStreams, mnFields, mnParams, mnMIME,
+  {$ifdef FPC}
+  sha1, base64,
+  {$else}
+  NetEncoding, Hash,
+  {$endif}
   mnSockets, mnConnections, mnServers;
 
 const
   cDefaultKeepAliveTimeOut = 50000; //TODO move module
-  URLPathDelim  = '/';
 
 type
   TmodModuleException = class(Exception);
@@ -49,20 +62,46 @@ type
   TmodModuleConnection = class;
   TmodModuleConnectionClass = class of TmodModuleConnection;
 
-  TmodCommand = class;
+  TwebCommand = class;
+
+  TmodModule = class;
 
   TmodHeaderState = (
     resHeaderSending,
     resHeadSent, //reposnd line, first line before header
     resHeaderSent,
-    resLatch, //raise exception when writing to stream , i don't like it!
+    //resLatch, //raise exception when writing to stream , i don't like it!
     //resBodySent,
     //resSuccess,
     //resKeepAlive,
+    resHeadReceived,
+    resHeaderReceived,
     resEnd
     );
 
   TmodHeaderStates = set of TmodHeaderState;
+
+  TmodAnswer = (
+    hrNone,
+    hrOK,
+    hrNoContent,
+    hrUnauthorized,
+    hrForbidden, //403
+    hrError, //500 Internal Error
+    hrRedirect, //302
+    hrNotModified,
+    hrMovedTemporarily, //307
+    hrMovedPermanently,
+    hrNotFound,
+    hrSwitchingProtocols,
+    hrServiceUnavailable,
+    hrCustom
+  );
+
+  TmodAnswerHelper = record helper for TmodAnswer
+    function ToString: string; //HTTP
+    procedure FromNumber(Number: Integer); //HTTP
+  end;
 
   TmodHeader = class(TmnHeader)
   private
@@ -70,6 +109,7 @@ type
   public
     function Domain: string;
     function Origin: string;
+    function Host: string;
     property States: TmodHeaderStates read FStates;
     procedure Clear; override;
   end;
@@ -87,6 +127,43 @@ type
     property Communicate: TmodCommunicate read FCommunicate;
   end;
 
+  { TmnwCookie }
+
+  TmnwCookie = class(TmnNameValueObject)
+  private
+    FDomain: string;
+    FPath: string;
+    FAge: Integer;
+    FChanged: Boolean;
+    FDeleting: Boolean;
+    procedure SetAge(const AValue: Integer);
+    procedure SetDomain(const AValue: string);
+    procedure SetPath(const AValue: string);
+  protected
+    procedure SetValue(const AValue: string); override;
+    procedure Created; override;
+  public
+    Stricted: Boolean; //SameSite
+    Secured: Boolean; //HTTPS only
+    function GetText: string;
+    function GenerateValue: string;
+    procedure Delete;
+    procedure SetChanged;
+    procedure ResetChanged;
+    property Path: string read FPath write SetPath;
+    property Domain: string read FDomain write SetDomain;
+    property Age: Integer read FAge write SetAge;
+    property Changed: Boolean read FChanged;
+  end;
+
+  { TmnwCookies }
+
+  TmnwCookies = class(TmnNameValueObjectList<TmnwCookie>)
+  public
+    procedure SetRequestText(S: string);
+    function GetRequestText: string;
+  end;
+
   TmnCustomCommand = class;
 
   TmodCommunicate = class abstract(TmnObject)
@@ -94,15 +171,17 @@ type
     FHead: string;
     FHeader: TmodHeader;
     FKeepAlive: Boolean;
-    FCookies: TStrings;
+    FCookies: TmnwCookies;
     FWritingStarted: Boolean;
     FContentLength: Int64;
     FParent: TmnCustomCommand;
     FStreamControl: TmodCommunicateStreamControl;
-    function GetLatch: Boolean;
-    procedure SetLatch(const AValue: Boolean);
-    procedure SetHead(const Value: string);
+
+    FStamp: string;
+    //function GetLatch: Boolean;
+    //procedure SetLatch(const AValue: Boolean);
   protected
+    procedure SetHead(const Value: string); virtual;
     procedure DoWriting(vCount: Longint);
     procedure DoReading(vCount: Longint);
 
@@ -123,12 +202,14 @@ type
     procedure SetTrigger(TriggerHeader: Boolean); virtual;
     property Stream: TmnBufferStream read GetStream;
     property Header: TmodHeader read FHeader;
-    property Cookies: TStrings read FCookies;
-    procedure SetCookie(const vNameSpace, vName, Value: string);
+    property Cookies: TmnwCookies read FCookies;
+    procedure SetCookie(const vNameSpace, vName, Value: string); overload;
+    procedure SetCookie(const vName, Value: string); overload;
     function GetCookie(const vNameSpace, vName: string): string;
 
     procedure Reset;
-    procedure ReceiveHeader(WithHead: Boolean); virtual;
+    //* WithHead: Is Head is already recieved elsewhere
+    procedure ReceiveHeader(WithHead: Boolean = False); virtual;
     procedure SendHeader(WithHead: Boolean = True); virtual;
 
     procedure  Clear; virtual;
@@ -146,7 +227,9 @@ type
     property Parent: TmnCustomCommand read FParent;
     property ContentLength: Int64 read FContentLength write FContentLength;
     property KeepAlive: Boolean read FKeepAlive write FKeepAlive;
-    property Latch: Boolean read GetLatch write SetLatch;
+    //property Latch: Boolean read GetLatch write SetLatch;
+    //need disccuss
+    property Stamp: string read FStamp write FStamp;
   end;
 
   TmodRequestInfo = record
@@ -176,6 +259,23 @@ type
 
   TmodOptionValue = (ovUndefined, ovNo, ovYes);
 
+  //  class operator = (const Source: Boolean): TmodOptionValue;
+
+  { TmodOptionValueHelper }
+
+  TmodOptionValueHelper = record helper for TmodOptionValue
+  private
+    function GetAsBoolean: Boolean;
+    procedure SetAsBoolean(const Value: Boolean);
+    function GetAsString: String;
+  public
+    {class operator Explicit(const Source: Boolean): TmodOptionValue;
+    class operator Implicit(Source : Boolean) : TmodOptionValue;
+    class operator Implicit(Source : TmodOptionValue): Boolean;}
+    property AsBoolean: Boolean read GetAsBoolean write SetAsBoolean;
+    property AsString: string read GetAsString;
+  end;
+
   { TmodRequest }
 
   TmodCommunicateUsing = record
@@ -186,10 +286,15 @@ type
     WebSocket: Boolean;
   end;
 
-  TStreamMode = set of (smRequestCompress, smRespondCompress, smAllowCompress);
+  TStreamMode = set of (
+    smRequestCompress,
+    smAllowCompress,
+    smRespondCompressing // using proxies
+  );
+
   TStreamModeHelper = record helper for TStreamMode
     function RequestCompress: Boolean;
-    function RespondCompress: Boolean;
+    function RespondCompressing: Boolean;
     function AllowCompress: Boolean;
   end;
 
@@ -210,7 +315,7 @@ type
     FRoute: TmnRoute;
     FPath: String;
     FConnectionType: TConnectionType;
-    FChunked: Boolean;
+    //FChunked: Boolean;
     FProtcolClass: TmnProtcolStreamProxyClass;
     FCompressProxy: TmnCompressStreamProxy;
     FProtcolProxy: TmnProtcolStreamProxy;
@@ -221,6 +326,7 @@ type
     procedure SetChunkedProxy(const Value: TmnChunkStreamProxy);
     procedure SetCompressProxy(const Value: TmnCompressStreamProxy);
     procedure SetProtcolClass(const Value: TmnProtcolStreamProxyClass);
+    function GetConnected: Boolean;
   protected
     Info: TmodRequestInfo;
     procedure Created; override;
@@ -248,6 +354,7 @@ type
     property Protocol: string read Info.Protocol write Info.Protocol;
     property Address: string read Info.Address write Info.Address;
     property Query: string read Info.Query write Info.Query;
+
     //for module
     property Command: String read Info.Command write Info.Command;
     property Client: String read Info.Client write Info.Client;
@@ -271,60 +378,76 @@ type
     //WebSocket
     property ProtcolClass: TmnProtcolStreamProxyClass read FProtcolClass write SetProtcolClass;
     property ProtcolProxy: TmnProtcolStreamProxy read FProtcolProxy write FProtcolProxy;
+
+    property Connected: Boolean read GetConnected;
   end;
 
-  TStreamPersistWrapper = class(TmnRefInterfacedPersistent, ImnStreamPersist)
+  TInterfacedStreamtWrapper = class(TInterfacedPersistent, ImnStreamPersist)
   protected
     FStream: TStream;
-    procedure SaveToStream(Stream: TStream; Count: Int64);
-    procedure LoadFromStream(Stream: TStream; Count: Int64);
+    procedure SaveToStream(Stream: TStream; Count: Int64); overload;
+    procedure LoadFromStream(Stream: TStream; Count: Int64); overload;
   public
-    class function CreateInterface(vStream: TStream): ImnStreamPersist;
+    constructor Create(vStream: TStream);
   end;
+
+  TmodFileDisposition = (
+    fdResend, //Force send it even match stamp
+    fdAttachment,
+    fdInline //Over Attachment
+  );
+  TmodFileDispositions = set of TmodFileDisposition;
+
+  TmodSendOption = (
+    sndoNoCompress
+  );
+
+  TmodSendOptions = set of TmodSendOption;
 
   { TmodRespond }
 
   TmodRespond = class(TmodCommunicate)
   private
+    FAnswer: TmodAnswer;
+    FContentType: String;
+    procedure SetAnswer(const Value: TmodAnswer);
   protected
     FRequest: TmodRequest;
+    procedure SetHead(const Value: string); override;
     function GetStream: TmnBufferStream; override;
     procedure InitProtocol; override;
   public
     constructor Create(ARequest: TmodRequest); //need trigger event
     function WriteString(const s: string): Boolean;
     function WriteLine(const s: string): Boolean;
-    function SendData(const s: UTF8String): Boolean; overload;
-    function SendData(const s: string): Boolean; overload;
-    function SendData(s: TStream; Count: Int64): Boolean; overload;
-    function SendData(s: ImnStreamPersist; Count: Int64): Boolean; overload;
 
-    function ReceiveData(s: TStream; Count: Int64): Boolean; overload;
-    function ReceiveData(s: ImnStreamPersist; Count: Int64): Boolean; overload;
+    function SendUTF8String(const s: UTF8String): Boolean; overload;
+    function SendString(const s: string): Boolean; overload;
+    function SendStream(s: TStream; ASize: Int64; AAlias: string; AFileDate: TDateTime; FileDispositions: TmodFileDispositions = []): Boolean; overload;
+    function SendStream(s: TStream; ASize: Int64; AOptions: TmodSendOptions = []): Boolean; overload;
+    function SendStream(s: ImnStreamPersist; Count: Int64; AOptions: TmodSendOptions = []): Boolean; overload;
+
+    function SendFile(const AFileName: string; Alias: string = ''; FileDispositions: TmodFileDispositions = []): Boolean; overload;
+
+    function ReceiveStream(s: TStream): Int64; overload;
+    function ReceiveStream(s: ImnStreamPersist; Count: Int64): Int64; overload;
 
     property Request: TmodRequest read FRequest;
+    property ContentType: string read FContentType write FContentType;
+    property Answer: TmodAnswer read FAnswer write SetAnswer;
   end;
 
   TmodeResult = (
     mrSuccess,
+    mrError,
     mrKeepAlive //keep the stream connection alive, not the command
-    );
+  );
 
   TmodeResults = set of TmodeResult;
 
   TmodRespondResult = record
     Status: TmodeResults;
     Timout: Integer;
-  end;
-
-  TmodOptionValueHelper = record helper for TmodOptionValue
-  private
-    function GetAsBoolean: Boolean;
-    procedure SetAsBoolean(const Value: Boolean);
-    function GetAsString: String;
-  public
-    property AsBoolean: Boolean read GetAsBoolean write SetAsBoolean;
-    property AsString: string read GetAsString;
   end;
 
   {
@@ -351,6 +474,7 @@ type
     function CreateRequest(AStream: TmnConnectionStream): TmodRequest; virtual;
     function CreateRespond: TmodRespond; virtual;
     procedure Created; override;
+    function SkipHeader: Boolean; virtual;
   public
     constructor Create;
     destructor Destroy; override;
@@ -394,10 +518,12 @@ type
     property UserAgent: UTF8String read FUserAgent write FUserAgent;
   end;
 
+  { TwebRespond }
+
   TwebRespond = class(TmodRespond)
   private
-    FContentType: String;
-    FETag: string;
+    FLocation: string;
+    FHomePath: string; //Document root folder
     function GetRequest: TwebRequest;
   protected
     procedure DoPrepareHeader; override; //Called by Server
@@ -405,17 +531,27 @@ type
     procedure DoHeaderSent; override;
     procedure DoHeaderReceived; override; //Called by Client
   public
+
     function StatusCode: Integer;
     function StatusResult: string;
     function StatusVersion: string;
+    //Document root folder
+    property HomePath: string read FHomePath write FHomePath;
+
     property Request: TwebRequest read GetRequest;
-    property ContentType: string read FContentType write FContentType;
-    property ETag: string read FETag write FETag;
+    property Location: string read FLocation write FLocation; //Relocation it to another url
   end;
+
+  { TwebCommand }
 
   TwebCommand = class(TmnCustomServerCommand)
   private
+    FModule: TmodModule;
+    function GetActive: Boolean;
+    function GetRespond: TwebRespond;
   protected
+
+    function CreateRequest(AStream: TmnConnectionStream): TmodRequest; override;
     function CreateRespond: TmodRespond; override;
 
     procedure DoPrepareHeader(Sender: TmodCommunicate); override;
@@ -424,39 +560,27 @@ type
     procedure RespondResult(var Result: TmodRespondResult); virtual;
     function Execute: TmodRespondResult;
     procedure Unprepare(var Result: TmodRespondResult); virtual;
-    procedure Created; override;
-  public
-  end;
-
-  //*
-
-  TmodModule = class;
-
-  TmodCommand = class(TwebCommand)
-  private
-    FModule: TmodModule;
-    function GetActive: Boolean;
-  protected
     procedure SetModule(const Value: TmodModule); virtual;
     procedure Log(S: String); virtual;
-
-    function CreateRequest(AStream: TmnConnectionStream): TmodRequest; override;
-    function CreateRespond: TmodRespond; override;
+    procedure Created; override;
   public
     constructor Create(AModule: TmodModule; ARequest: TmodRequest); virtual;
     //GetCommandName: make name for command when register it, useful when log the name of it
     property Module: TmodModule read FModule write SetModule;
     property Active: Boolean read GetActive;
     //Lock the server listener when execute the command
+    property Respond: TwebRespond read GetRespond;
   end;
 
-  TmodCommandClass = class of TmodCommand;
+  //*
+
+  TwebCommandClass = class of TwebCommand;
 
   TmodCommandClassItem = class(TmnNamedObject)
   private
-    FCommandClass: TmodCommandClass;
+    FCommandClass: TwebCommandClass;
   public
-    property CommandClass: TmodCommandClass read FCommandClass;
+    property CommandClass: TwebCommandClass read FCommandClass;
   end;
 
   { TmodCommandClasses }
@@ -464,7 +588,7 @@ type
   TmodCommandClasses = class(TmnNamedObjectList<TmodCommandClassItem>)
   private
   public
-    function Add(const Name: String; CommandClass: TmodCommandClass): Integer;
+    function Add(const Name: String; CommandClass: TwebCommandClass): Integer;
   end;
 
   {
@@ -486,10 +610,10 @@ type
     FUse: TmodCommunicateUsing;
     procedure SetAliasName(AValue: String);
   protected
-    FFallbackCommand: TmodCommandClass;
+    FFallbackCommand: TwebCommandClass;
     //Name here will corrected with registered item name for example Get -> GET
     function GetActive: Boolean; virtual;
-    function GetCommandClass(var CommandName: String): TmodCommandClass; virtual;
+    function GetCommandClass(var CommandName: String): TwebCommandClass; virtual;
     procedure Created; override;
     procedure DoRegisterCommands; virtual; //deprecated 'use RegisterItems';
     procedure RegisterCommands;
@@ -499,28 +623,33 @@ type
 
     function Match(const ARequest: TmodRequest): Boolean; virtual;
     procedure PrepareRequest(ARequest: TmodRequest);
-    function CreateCommand(CommandName: String; ARequest: TmodRequest): TmodCommand; overload;
+    function CreateCommand(CommandName: String; ARequest: TmodRequest): TwebCommand; overload;
 
-    procedure DoReceiveHeader(ARequest: TmodRequest); virtual;
-    procedure ReceiveHeader(ARequest: TmodRequest);
-
-    function RequestCommand(ARequest: TmodRequest): TmodCommand; virtual;
+    function RequestCommand(ARequest: TmodRequest): TwebCommand; virtual;
     procedure Log(S: String); virtual;
     procedure Start; virtual;
+    procedure Started; virtual;
     procedure Stop; virtual;
     procedure Reload; virtual;
     procedure Init; virtual;
     procedure Idle; virtual;
+
+    //* Run in Connection Thread
     procedure InternalError(ARequest: TmodRequest; var Handled: Boolean); virtual;
+    //* Run in Connection Thread
+    function InternalExecute(ARequest: TmodRequest): TmodRespondResult; virtual;
+    procedure DoReceiveHeader(ARequest: TmodRequest); virtual;
+    function SkipHeader: Boolean; virtual;
+
   public
     //Default fallback module should have no alias name
     //Protocols all should lowercase
     constructor Create(const AName, AAliasName: String; AProtocols: TArray<String>; AModules: TmodModules = nil); virtual;
     destructor Destroy; override;
-    function RegisterCommand(vName: String; CommandClass: TmodCommandClass; AFallback: Boolean = False): Integer; overload;
+    function RegisterCommand(vName: String; CommandClass: TwebCommandClass; AFallback: Boolean = False): Integer; overload;
 
     //* Run in Connection Thread
-    function Execute(ARequest: TmodRequest): TmodRespondResult;
+    function Execute(ARequest: TmodRequest): TmodRespondResult; virtual;
 
     property Commands: TmodCommandClasses read FCommands;
     property Active: Boolean read GetActive;
@@ -528,6 +657,7 @@ type
     //* use lower case in Protocols
     property Protocols: TArray<String> read FProtocols;
     property AliasName: String read FAliasName write SetAliasName;
+    //All modules before used sorted by Level
     property Level: Integer read FLevel write FLevel;
 
     property Use: TmodCommunicateUsing read FUse write FUse;
@@ -554,25 +684,26 @@ type
     procedure SetEndOfLine(AValue: String);
   protected
     function CreateRequest(Astream: TmnBufferStream): TmodRequest; virtual;
-    function CheckRequest(const ARequest: string): Boolean; virtual;
     function GetActive: Boolean; virtual;
     procedure Created; override;
-    procedure Start;
+    procedure Start; //When server start, init values here
+    procedure Started; //after all modules started
     procedure Stop;
-    procedure Init;
+    procedure Init; //Init called from the first connection
     procedure Idle;
     function Compare(Left: TmodModule; Right: TmodModule): Integer; override;
     property Server: TmodModuleServer read FServer;
     procedure Added(Item: TmodModule); override;
   public
     constructor Create(AServer: TmodModuleServer);
-    procedure ParseHead(ARequest: TmodRequest; const RequestLine: String); virtual;
+    procedure ParseHead(ARequest: TmodRequest; const AHead: String); virtual;
     function Match(ARequest: TmodRequest): TmodModule; virtual;
     property DefaultProtocol: String read FDefaultProtocol write FDefaultProtocol;
 
     function ServerUseSSL: Boolean;
     function Find<T: Class>: T; overload;
     function Find<T: Class>(const AName: string): T; overload;
+    function Find(const AName: string): TmodModule; overload;
     function Find(const ModuleClass: TmodModuleClass): TmodModule; overload;
 
     function Add(const Name, AliasName: String; AModule: TmodModule): Integer; overload;
@@ -614,7 +745,10 @@ type
 
   TmodModuleServer = class(TmnEventServer)
   private
+    FEnabled: Boolean;
     FModules: TmodModules;
+    FName: string;
+    procedure SetEnabled(AValue: Boolean);
   protected
     function DoCreateListener: TmnListener; override;
     procedure StreamCreated(AStream: TmnBufferStream); virtual;
@@ -626,10 +760,12 @@ type
     procedure DoIdle; override;
     function Module<T: class>: T;
     procedure Created; override;
-
   public
+    constructor Create; override;
     destructor Destroy; override;
     property Modules: TmodModules read FModules;
+    property Enabled: Boolean read FEnabled write SetEnabled;
+    property Name: string read FName write FName;
   end;
 
 { Pool }
@@ -704,7 +840,11 @@ type
   end;
 
 function URIDecode(const S: UTF8String): utf8string;
-function ParseRaw(const Raw: String; out Method, Protocol, URI: string): Boolean;
+function ParseHttpHead(const Raw: String; out Method, Params, Protocol: string): Boolean; overload;
+function ParseHttpHead(const Raw: String; out Method, Params: string): Boolean; overload;
+//HTTP/1.1 200 OK
+function ParseAnswerHead(const Raw: String; out Number: Integer; out Protocol, Msg: string): Boolean; overload;
+function ParseAnswerHead(const Raw: String; out Answer: TmodAnswer; Msg: string): Boolean; overload;
 function ParseURI(const URI: String; out Address, Params: string): Boolean;
 procedure ParseQuery(const Query: String; mnParams: TmnFields);
 procedure ParseParamsEx(const Params: String; mnParams: TmnParams);
@@ -722,9 +862,15 @@ function StartsSubPath(const SubKey, Path: string): Boolean;
 function ComposeHttpURL(UseSSL: Boolean; const DomainName: string; const Port: string = ''; const Directory: string = ''): string; overload;
 function ComposeHttpURL(const Protocol, DomainName: string; const Port: string = ''; const Directory: string = ''): string; overload;
 
+function HashWebSocketKey(const key: string): string;
+
 const
-  ProtocolVersion = 'HTTP/1.1'; //* Capital letter
+  sHTTPProtocol1 = 'HTTP/1.1'; //* Capital letter
   sUserAgent = 'miniWebModule/1.1';
+  sMiniLibServer = 'minilib.server/v1';
+
+var
+  DevelopperMode:Boolean = False;
 
 implementation
 
@@ -782,7 +928,7 @@ begin
   Result := R;
 end;
 
-function ParseRaw(const Raw: String; out Method, Protocol, URI: string): Boolean;
+function ParseHttpHead(const Raw: String; out Method, Params, Protocol: string): Boolean;
 var
   aRequests: TStringList;
 begin
@@ -792,13 +938,42 @@ begin
     if aRequests.Count > 0 then
       Method := aRequests[0];
     if aRequests.Count > 1 then
-      URI := URIDecode(aRequests[1]);
+      Params := URIDecode(aRequests[1]);
     if aRequests.Count > 2 then
       Protocol := aRequests[2];
   finally
     FreeAndNil(aRequests);
   end;
   Result := True;
+end;
+
+function ParseHttpHead(const Raw: String; out Method, Params: string): Boolean; overload;
+var
+  Protocol: string;
+begin
+  Result := ParseHttpHead(Raw, Method, Params, Protocol);
+end;
+
+function ParseAnswerHead(const Raw: String; out Number: Integer; out Protocol, Msg: string): Boolean;
+var
+  aRequests: TStringList;
+  Index, NextIndex, Count: Integer;
+  s: string;
+begin
+  StrScanTo(Raw, 1, Protocol, Index, NextIndex, Count, [' '], [], ['''', '"']);
+  StrScanTo(Raw, NextIndex, s, Index, NextIndex, Count, [' '], [], ['''', '"']);
+  Number := StrToIntDef(S, 0);
+  Msg := Copy(Raw, NextIndex, MaxInt);
+  Result := True;
+end;
+
+function ParseAnswerHead(const Raw: String; out Answer: TmodAnswer; Msg: string): Boolean; overload;
+var
+  Number: Integer;
+  Protocol: string;
+begin
+  Result := ParseAnswerHead(Raw, Number, Protocol, Msg);
+  Answer.FromNumber(Number);
 end;
 
 function ParseURI(const URI: String; out Address, Params: string): Boolean;
@@ -882,19 +1057,9 @@ begin
   URIPath := Copy(URIPath, Length(Name) + 1, MaxInt);
 end;
 
-var
-  DefFormatSettings : TFormatSettings;
-
 function FormatHTTPDate(vDate: TDateTime): string;
-var
-  aDate: TDateTime;
 begin
-  {$ifdef FPC}
-  aDate := NowUTC;
-  {$else}
-  aDate := TTimeZone.Local.ToUniversalTime(vDate);
-  {$endif}
-  Result := FormatDateTime('ddd, dd mmm yyyy hh:nn:ss', aDate, DefFormatSettings) + ' GMT';
+  Result := DateTimeToRFC2822(vDate);
 end;
 
 function ExtractDomain(const URI: string): string;
@@ -983,82 +1148,104 @@ begin
   inherited;
 end;
 
-function TmodRespond.ReceiveData(s: ImnStreamPersist; Count: Int64): Boolean;
+function TmodRespond.ReceiveStream(s: ImnStreamPersist; Count: Int64): Int64;
 var
   aDecompress: Boolean;
-  lStream: TmnLimitStream;
-  zStream: TZDecompressionStream;
+  mStream: TMemoryStream;
+//  zStream: {$ifdef FPC}TGZipDecompressionStream;{$else}TDecompressionStream{$endif}
 begin
-  Result := True;
   aDecompress := (Request.Use.AcceptCompressing in [ovUndefined]) and (Header.Field['Content-Encoding'].Have('gzip', [',']));
   if aDecompress then
   begin
-
+    mStream := TMemoryStream.Create;//duplicate memory avoid this :(
+    try
+      Result := gzipDecompressStream(Stream, mStream, Count);
+      s.LoadFromStream(mStream, Result);
+    finally
+      mStream.Free;
+    end;
   end
   else
+  begin
     s.LoadFromStream(Stream, Count);
+    Result := Count;
+  end;
 end;
 
-function TmodRespond.ReceiveData(s: TStream; Count: Int64): Boolean;
+function TmodRespond.ReceiveStream(s: TStream): Int64;
 var
   aDecompress: Boolean;
 begin
-  Result := True;
-  aDecompress := (Request.Use.AcceptCompressing in [ovUndefined]) and (Header.Field['Content-Encoding'].Have('gzip', [',']));
-  if aDecompress then
-    gzipDecompressStream(Stream, s, Count)
+  if (Request.ChunkedProxy<>nil) and (ContentLength = 0) then
+    Result := Stream.ReadStream(s, -1)
+  else if (ContentLength > 0) and KeepAlive then //Respond.KeepAlive because we cant use compressed with keeplive or contentlength >0
+  begin
+    if (Request.CompressProxy<>nil) and (Request.CompressProxy.Limit <> 0) then
+      Result := Stream.ReadStream(s, -1)
+    else
+    begin
+      aDecompress := (Request.Use.AcceptCompressing in [ovUndefined]) and (Header.Field['Content-Encoding'].Have('gzip', [',']));
+      if aDecompress then
+        Result := gzipDecompressStream(Stream, s, ContentLength)
+      else
+        Result := Stream.ReadStream(s, ContentLength);
+    end;
+  end
   else
-    s.CopyFrom(Stream, Count);
+    Result := Stream.ReadStream(s, -1); //read complete stream
 end;
 
-function TmodRespond.SendData(s: TStream; Count: Int64): Boolean;
+function TmodRespond.SendStream(s: TStream; ASize: Int64; AOptions: TmodSendOptions): Boolean;
 var
-  aInt: ImnStreamPersist;
+  stream: TInterfacedStreamtWrapper;
 begin
-  aInt := TStreamPersistWrapper.CreateInterface(s);
-  Result := SendData(aInt, Count);
+  stream := TInterfacedStreamtWrapper.Create(s);
+  try
+    Result := SendStream(stream, ASize, AOptions);
+  finally
+    FreeAndNil(stream);
+  end;
 end;
 
-function TmodRespond.SendData(s: ImnStreamPersist; Count: Int64): Boolean;
+function TmodRespond.SendStream(s: ImnStreamPersist; Count: Int64; AOptions: TmodSendOptions): Boolean;
+var
+  aCompress: Boolean;
 
-  procedure _SendHeader(ACount: Int64);
+  procedure _SendHeader(ACount: Int64; ACompress: Boolean);
   begin
     if not (resHeaderSent in  Header.States) then
     begin
-      PutHeader('Content-Length', ACount.ToString);
-      PutHeader('Content-Encoding', 'gzip');
-
-      //Respond.AddHeader('Content-Length', Length(aData).ToString);
+      ContentLength := ACount;
+      if ACompress then
+        PutHeader('Content-Encoding', 'gzip');
       SendHeader;
     end;
-  end;
+end;
 
 var
   mStream: TMemoryStream;
-  zStream: TZCompressionStream;
-  aCompress: Boolean;
+  zStream: {$ifdef FPC}TGZipCompressionStream{$else}TZCompressionStream{$endif};
 begin
-  Result := Count<>0;
+  Result := Count <> 0;
 
-  if Count=0 then
-    _SendHeader(0)
+  if Count = 0 then
+    _SendHeader(0, False)
   else
   begin
-    aCompress := Request.Mode.AllowCompress;
+    aCompress := Request.Mode.AllowCompress and not (sndoNoCompress in AOptions);
 
     if aCompress then
     begin
       mStream := TMemoryStream.Create;
       try
-
-        zStream := TZCompressionStream.Create(mStream, zcDefault, GzipBits[True]);
+        zStream := {$ifdef FPC}TGZipCompressionStream.Create(clDefault, mStream);{$else}TZCompressionStream.Create(mStream, zcDefault, GzipBits[True]);{$endif}
         try
           s.SaveToStream(zStream, Count);
         finally
           zStream.Free;
         end;
 
-        _SendHeader(mStream.Size);
+        _SendHeader(mStream.Size, True);
 
         Stream.Write(mStream.Memory^, mStream.Size);
 
@@ -1068,30 +1255,138 @@ begin
     end
     else
     begin
-      _SendHeader(Count);
+      _SendHeader(Count, False);
       s.SaveToStream(Self.Stream, Count);
     end;
   end;
 end;
 
-function TmodRespond.SendData(const s: UTF8String): Boolean;
-var
-  aStream: TPointerStream;
+function FileStamp(aFileDate: TDateTime; Size: Int64 = 0): string; inline;
 begin
-  aStream := TPointerStream.Create(PByte(s), Length(s), True);
+  Result := DateTimeToUnix(aFileDate).ToString;
+  if Size <> 0 then
+    Result := Result + '-' + Size.ToString;
+end;
+
+function TmodRespond.SendFile(const AFileName: string; Alias: string; FileDispositions: TmodFileDispositions): Boolean;
+var
+  aStream: TStream;
+  aSize: Int64;
+  aFileDate: TDateTime;
+begin
+  if not FileExists(aFileName) then
+  begin
+    Answer := hrNotFound;
+    exit(False);
+  end;
+
+  FileAge(AFileName, aFileDate);
+  aSize := GetSizeOfFile(AFileName);
+
+
+  //By default, web browsers and proxies do not cache content when accessed via an IP address
+  if not DevelopperMode and not (fdResend in FileDispositions) and (Request.Stamp = FileStamp(aFileDate, aSize)) then
+  begin
+    Answer := hrNotModified;
+    exit(False);
+  end;
+
+  if Alias='' then
+    Alias := ExtractFileName(AFileName);
+
+  Answer := hrOK;
+
+  aStream := TFileStream.Create(AFileName, fmShareDenyNone or fmOpenRead);
   try
-    Result := SendData(aStream, Length(s));
+    Result := SendStream(aStream, aSize, Alias, aFileDate, FileDispositions);
   finally
     aStream.Free;
   end;
 end;
 
-function TmodRespond.SendData(const s: string): Boolean;
+function TmodRespond.SendUTF8String(const s: UTF8String): Boolean;
+var
+  aStream: TmnPointerStream;
+begin
+  aStream := TmnPointerStream.Create(PByte(s), Length(s));
+  try
+    Result := SendStream(aStream, Length(s));
+  finally
+    aStream.Free;
+  end;
+end;
+
+function TmodRespond.SendString(const s: string): Boolean;
 var
   t: UTF8String;
 begin
+  {$ifdef FPC}
   t := UTF8Encode(s);
-  Result := SendData(t);
+  Result := SendString(t);
+  {$else}
+  Result := SendUTF8String(t);
+  {$endif}
+end;
+
+function TmodRespond.SendStream(s: TStream; ASize: Int64; AAlias: string; AFileDate: TDateTime; FileDispositions: TmodFileDispositions): Boolean;
+var
+  aMIMEItem: TmnMIMEItem;
+  aDisposition, aStamp: string;
+  SendOptions: TmodSendOptions;
+begin
+  aStamp := FileStamp(AFileDate, ASize);
+
+  if not DevelopperMode and not (fdResend in FileDispositions) and (Request.Stamp = aStamp) then
+  begin
+    Answer := hrNotModified;
+    exit(False);
+  end;
+
+  SendOptions := [];
+
+  Stamp := aStamp;
+
+  Header['Cache-Control']  := 'public, max-age=3600, must-revalidate'; //86400 = 24*60*60 = 1 day
+  if AFileDate > 0 then
+    Header['Last-Modified']  := FormatHTTPDate(AFileDate);
+
+  if fdInline in FileDispositions then
+    aDisposition := 'inline'
+  else if fdAttachment in FileDispositions then
+    aDisposition := 'attachment'
+  else
+    aDisposition := '';
+
+  aMIMEItem := DocumentToMIME(AAlias);
+  if aMIMEItem <> nil then
+  begin
+    ContentType := aMIMEItem.ContentType;
+    if Binary in aMIMEItem.Features then
+    begin
+      if aDisposition = '' then
+        aDisposition := 'attachment';
+      if AAlias <> '' then
+        aDisposition := ConcatString(aDisposition, ';', 'filename="' + AAlias + '"')
+    end;
+
+    if NoCompress in aMIMEItem.Features then
+    begin
+      SendOptions := SendOptions + [sndoNoCompress];
+    end;
+  end
+  else
+  begin
+    ContentType := 'application/octet-stream';
+    if aDisposition = '' then
+      aDisposition := 'attachment';
+    if (AAlias <> '') then
+        aDisposition := ConcatString(aDisposition, ';', 'filename="' + AAlias + '"')
+  end;
+
+  if aDisposition <> '' then
+    Header['Content-Disposition'] := aDisposition;
+
+  Result := SendStream(s, ASize, SendOptions);
 end;
 
 function TmodRespond.GetStream: TmnBufferStream;
@@ -1106,7 +1401,7 @@ end;
 
 function TmodRespond.WriteString(const s: string): Boolean;
 begin
-  Result := Stream.WriteUTF8String(S) > 0;
+  Result := Stream.WriteUTF8String(UTF8Encode(S)) > 0;
 end;
 
 { TmodRequest }
@@ -1199,6 +1494,11 @@ begin
   inherited;
 end;
 
+function TmodRequest.GetConnected: Boolean;
+begin
+  Result := (Stream <> nil) and Stream.Connected;
+end;
+
 function TmodRequest.GetStream: TmnBufferStream;
 begin
   Result := FStream;
@@ -1240,8 +1540,13 @@ procedure TmodModuleServer.Created;
 begin
   inherited;
   FModules := CreateModules;
-  Port := '81';
+end;
 
+constructor TmodModuleServer.Create;
+begin
+  inherited;
+  FEnabled := True;
+  Port := '80';
 end;
 
 function TmodModuleServer.CreateModules: TmodModules;
@@ -1281,37 +1586,32 @@ end;
 
 procedure TmodModuleConnection.Process;
 var
-  aRequestLine: String;
+  aHead: String;
   aRequest: TmodRequest;
   aModule: TmodModule;
   Result: TmodRespondResult;
 begin
   inherited;
   //need support peek :( for check request
-  Stream.ReadUTF8Line(aRequestLine);
-  aRequestLine := TrimRight(aRequestLine); //* TODO do we need UTF8ToString?
-  if Connected and (aRequestLine <> '') then //aRequestLine empty when timeout but not disconnected
+  //Stream.Peek(BB, 1)
+  //Result := IsSSL or (BB[1]<>#$16);
+  //EXIT
+
+  Stream.ReadUTF8Line(aHead);
+  aHead := TrimRight(aHead); //* TODO do we need UTF8ToString?
+  if Connected and (aHead <> '') then //aRequestLine empty when timeout but not disconnected
   begin
-
-    if not ModuleServer.Modules.CheckRequest(aRequestLine) then //check ssl connection on not ssl server need support peek :(
-    begin
-      Stream.Disconnect;
-      Exit;
-    end;
-
     aRequest := ModuleServer.Modules.CreateRequest(Stream);
     try
-      ModuleServer.Modules.ParseHead(aRequest, aRequestLine);
+      ModuleServer.Modules.ParseHead(aRequest, aHead);
       aModule := ModuleServer.Modules.Match(aRequest);
 
+      aRequest.Client := RemoteIP;
+      aRequest.IsSSL := IsSSL;
       if (aModule = nil) then
-      begin
-        Stream.Disconnect; //if failed
-      end
+        Stream.Disconnect //if failed, or no fallback module
       else
         try
-          aRequest.Client := RemoteIP;
-          aRequest.IsSSL := IsSSL;
           Result := aModule.Execute(aRequest);
         finally
           if Stream.Connected then
@@ -1329,6 +1629,13 @@ begin
       FreeAndNil(aRequest); //if create command then aRequest change to nil
     end;
   end;
+end;
+
+procedure TmodModuleServer.SetEnabled(AValue: Boolean);
+begin
+  if FEnabled = AValue then
+    Exit;
+  FEnabled := AValue;
 end;
 
 function TmodModuleServer.DoCreateListener: TmnListener;
@@ -1349,6 +1656,7 @@ procedure TmodModuleServer.DoStart;
 begin
   inherited;
   Modules.Start;
+  Modules.Started;
 end;
 
 procedure TmodModuleServer.DoStop;
@@ -1412,6 +1720,11 @@ begin
 end;
 
 
+function TmnCustomCommand.SkipHeader: Boolean;
+begin
+  Result := False;
+end;
+
 destructor TmnCustomCommand.Destroy;
 begin
   FreeAndNil(FRespond);
@@ -1460,7 +1773,7 @@ procedure TmnCustomCommand.DoPrepareHeader(Sender: TmodCommunicate);
 begin
 end;
 
-function TmodCommandClasses.Add(const Name: String; CommandClass: TmodCommandClass): Integer;
+function TmodCommandClasses.Add(const Name: String; CommandClass: TwebCommandClass): Integer;
 var
   aItem: TmodCommandClassItem;
 begin
@@ -1491,16 +1804,137 @@ function TwebCommand.Execute: TmodRespondResult;
 begin
   Result.Status := []; //default to be not keep alive, not sure, TODO
   Result.Timout := Request.Use.KeepAliveTimeOut; //not sure, TODO
+
   Prepare(Result);
   try
     RespondResult(Result);
+
+    if not Respond.IsHeaderSent and (Respond.Answer<>hrNone) then
+      Respond.SendHeader;
   finally
     Unprepare(Result);
   end;
 end;
 
-procedure TwebCommand.Prepare(var Result: TmodRespondResult);
+//TODO slow function needs to improvements
+//https://stackoverflow.com/questions/1549213/whats-the-correct-encoding-of-http-get-request-strings
+
+{$ifdef FPC}
+function EncodeBase64(const Buffer; Count: Integer): Utf8String;
+var
+  Outstream : TStringStream;
+  Encoder   : TBase64EncodingStream;
 begin
+  if Count=0 then
+    Exit('');
+  Outstream:=TStringStream.Create('');
+  try
+    Encoder:=TBase64EncodingStream.create(outstream);
+    try
+      Encoder.Write(Buffer, Count);
+    finally
+      Encoder.Free;
+      end;
+    Result:=Outstream.DataString;
+  finally
+    Outstream.free;
+    end;
+end;
+{$endif}
+
+function HashWebSocketKey(const key: string): string;
+var
+{$ifdef FPC}
+  b: TSHA1Digest;
+{$else}
+  b: TBytes;
+{$endif}
+begin
+{$ifdef FPC}
+  b := SHA1String(Key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11');
+  Result := EncodeBase64(b, SizeOf(b));
+{$else}
+  b := THashSHA1.GetHashBytes(Utf8String(Key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'));
+  Result := TNetEncoding.Base64String.EncodeBytesToString(b);
+{$endif}
+end;
+
+procedure TwebCommand.Prepare(var Result: TmodRespondResult);
+var
+  //aKeepAlive: Boolean;
+  WSHash, WSKey: string;
+  SendHostHeader: Boolean;
+begin
+  if Request.Header.Field['Connection'].Have('Upgrade', [',']) then
+  begin
+    if Request.Use.WebSocket and Request.Header.Field['Upgrade'].Have('WebSocket', [',']) then
+    begin
+      if Request.Header['Sec-WebSocket-Version'].ToInteger = 13 then
+      begin
+        WSHash := Request.Header['Sec-WebSocket-Key'];
+        SendHostHeader := Request.Header.ReadBool('X-Send-Server-Hostname', True);
+
+        WSKey := HashWebSocketKey(WSHash);
+        Respond.Answer := hrSwitchingProtocols;
+        //Respond.AddHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        Respond.AddHeader('Connection', 'Upgrade');
+        Respond.AddHeader('upgrade', 'websocket');
+        Respond.AddHeader('date: ', FormatHTTPDate(Now));
+        Respond.AddHeader('Sec-Websocket-Accept', WSKey);
+        if Request.Header['Sec-WebSocket-Protocol'] = 'plain' then
+          Respond.AddHeader('Sec-WebSocket-Protocol', 'plain');
+        Respond.SendHeader;
+
+        Respond.KeepAlive := True;
+        Request.ProtcolClass := TmnWebSocket13StreamProxy;
+        Request.ProtcolProxy := Request.ProtcolClass.Create;
+        Request.ConnectionType := ctWebSocket;
+        Result.Status := Result.Status + [mrKeepAlive];
+        Request.Stream.AddProxy(Request.ProtcolProxy);
+
+        if SendHostHeader then
+          Respond.Stream.WriteUTF8String('Request served by miniWebModule');
+        //* https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers
+      end;
+    end;
+  end;
+
+  if not Respond.IsHeaderSent and Request.KeepAlive then //not WebSocket
+  begin
+    Respond.KeepAlive := True;
+    Respond.AddHeader('Connection', 'Keep-Alive');
+    Respond.AddHeader('Keep-Alive', 'timout=' + IntToStr(Request.Use.KeepAliveTimeOut div 1000) + ', max=100');
+  end;
+
+  if Request.ConnectionType = ctWebSocket then
+  begin
+    Request.CompressProxy.Disable;
+  end
+  else
+  begin
+    if Request.Header.Field['Content-type'].Have('multipart/form-data', [';']) then
+    begin
+      Request.ConnectionType := ctFormData;
+    end;
+    {if not Respond.KeepAlive and (Request.Use.Compressing in [ovUndefined, ovYes]) then
+    begin
+      if Request.CompressProxy <> nil then
+        Respond.AddHeader('Content-Encoding', Request.CompressProxy.GetCompressName);
+    end;}
+
+    //Compressing
+    {if not Respond.KeepAlive and (UseCompressing in [ovUndefined, ovYes]) then
+    begin
+      if Request.Header.Field['Accept-Encoding'].Have('gzip', [',']) then
+        CompressClass := TmnGzipStreamProxy
+      else if Request.Header.Field['Accept-Encoding'].Have('deflate', [',']) then
+        CompressClass := TmnDeflateStreamProxy
+      else
+        CompressClass := nil;
+      if CompressClass <> nil then
+        Respond.AddHeader('Content-Encoding', CompressClass.GetCompressName);
+    end;}
+  end;
 end;
 
 procedure TwebCommand.RespondResult(var Result: TmodRespondResult);
@@ -1508,37 +1942,72 @@ begin
 end;
 
 procedure TwebCommand.Unprepare(var Result: TmodRespondResult);
+var
+  aParams: TmnParams;
 begin
+  inherited;
+  if Request.ConnectionType = ctWebSocket then
+  begin
+  end
+  else
+  begin
+    // If no content length that mean we cant continue as keep alive, content length is recomended to keep the stream
+    if not Respond.Header.Exists['Content-Length'] then //TODO see it Zaher,Belal
+      Respond.KeepAlive := False;
+
+    if Respond.KeepAlive then
+    begin
+      if Request.Header.IsExists('Keep-Alive') then //idk if really sent from client
+      begin
+        aParams := TmnParams.Create;
+        try
+          //Keep-Alive: timeout=5, max=1000
+          aParams.Separator := '=';
+          aParams.Delimiter := ',';
+          aParams.AsString := Request.Header['Keep-Alive'];
+          Result.Timout := aParams['timeout'].AsInteger;
+        finally
+          aParams.Free;
+        end;
+      end
+      else
+        Result.Timout := Request.Use.KeepAliveTimeOut;
+
+      Result.Status := Result.Status + [mrKeepAlive];
+    end;
+
+    Request.CompressProxy.Disable;
+  end;
 end;
 
-{ TmodCommand }
+{ TwebCommand }
 
-procedure TmodCommand.Log(S: String);
+procedure TwebCommand.Log(S: String);
 begin
   Module.Log(S);
 end;
 
-function TmodCommand.CreateRequest(AStream: TmnConnectionStream): TmodRequest;
+function TwebCommand.CreateRequest(AStream: TmnConnectionStream): TmodRequest;
 begin
   Result := TwebRequest.Create(Self, AStream);
 end;
 
-function TmodCommand.CreateRespond: TmodRespond;
-begin
-  Result := TwebRespond.Create(Request);
-end;
-
-function TmodCommand.GetActive: Boolean;
+function TwebCommand.GetActive: Boolean;
 begin
   Result := (Module <> nil) and (Module.Active);
 end;
 
-procedure TmodCommand.SetModule(const Value: TmodModule);
+function TwebCommand.GetRespond: TwebRespond;
+begin
+  Result := inherited Respond as TwebRespond;
+end;
+
+procedure TwebCommand.SetModule(const Value: TmodModule);
 begin
   FModule := Value;
 end;
 
-constructor TmodCommand.Create(AModule: TmodModule; ARequest: TmodRequest);
+constructor TwebCommand.Create(AModule: TmodModule; ARequest: TmodRequest);
 begin
   inherited Create(ARequest);
   FModule := AModule;
@@ -1546,10 +2015,10 @@ end;
 
 { TmodModule }
 
-function TmodModule.CreateCommand(CommandName: String; ARequest: TmodRequest): TmodCommand;
+function TmodModule.CreateCommand(CommandName: String; ARequest: TmodRequest): TwebCommand;
 var
   //  aName: string;
-  aClass: TmodCommandClass;
+  aClass: TwebCommandClass;
 begin
   //aName := GetCommandName(ARequest, ARequestStream);
 
@@ -1563,7 +2032,7 @@ begin
     Result := nil;
 end;
 
-function TmodModule.GetCommandClass(var CommandName: String): TmodCommandClass;
+function TmodModule.GetCommandClass(var CommandName: String): TwebCommandClass;
 var
   aItem: TmodCommandClassItem;
 begin
@@ -1589,13 +2058,11 @@ end;
 
 procedure TmodModule.InternalError(ARequest: TmodRequest; var Handled: Boolean);
 begin
-
 end;
 
-procedure TmodModule.ReceiveHeader(ARequest: TmodRequest);
+function TmodModule.InternalExecute(ARequest: TmodRequest): TmodRespondResult;
 begin
-  ARequest.ReceiveHeader(False); //* Head is already recieved elsewhere
-  DoReceiveHeader(ARequest);
+  Result.Status := [mrError];
 end;
 
 procedure TmodModule.Created;
@@ -1617,12 +2084,15 @@ begin
 
 end;
 
-procedure TmodModule.Stop;
+procedure TmodModule.Started;
 begin
-
 end;
 
-function TmodModule.RequestCommand(ARequest: TmodRequest): TmodCommand;
+procedure TmodModule.Stop;
+begin
+end;
+
+function TmodModule.RequestCommand(ARequest: TmodRequest): TwebCommand;
 begin
   Result := CreateCommand(ARequest.Command, ARequest);
 end;
@@ -1650,6 +2120,11 @@ begin
   inherited;
 end;
 
+procedure TmodModule.DoReceiveHeader(ARequest: TmodRequest);
+begin
+
+end;
+
 procedure TmodModule.DoRegisterCommands;
 begin
 end;
@@ -1658,10 +2133,6 @@ procedure TmodModule.DoPrepareRequest(ARequest: TmodRequest);
 begin
   if (AliasName <> '') then
     ARequest.Path := DeleteSubPath(ARequest.Route[0], ARequest.Path);
-end;
-
-procedure TmodModule.DoReceiveHeader(ARequest: TmodRequest);
-begin
 end;
 
 procedure TmodModule.DoMatch(const ARequest: TmodRequest; var vMatch: Boolean);
@@ -1673,7 +2144,7 @@ function TmodModule.Match(const ARequest: TmodRequest): Boolean;
 begin
   //Result := SameText(AliasName, ARequest.Module) and ((Protocols = nil) or StrInArray(ARequest.Protocol, Protocols));
   Result := False;
-  if ((Protocols = nil) or StrInArray(LowerCase(ARequest.Protocol), Protocols)) then
+  if ((Protocols = nil) or IsStrInArray(LowerCase(ARequest.Protocol), Protocols)) then
   begin
     DoMatch(ARequest, Result);
   end;
@@ -1684,8 +2155,18 @@ begin
 end;
 
 function TmodModule.Execute(ARequest: TmodRequest): TmodRespondResult;
+
+  procedure _ReceiveHeader;
+  begin
+    if not (resHeaderReceived in ARequest.Header.States) then
+    begin
+      ARequest.ReceiveHeader;
+      DoReceiveHeader(ARequest);
+    end;
+  end;
+
 var
-  aCommand: TmodCommand;
+  aCommand: TwebCommand;
   aHandled: Boolean;
 begin
   //Result.Status := [mrSuccess];
@@ -1695,13 +2176,17 @@ begin
   ARequest.Use.Compressing      := UseCompressing;
   ARequest.Use.WebSocket        := UseWebSocket;
 
-  ReceiveHeader(ARequest);
+  if not SkipHeader then
+    _ReceiveHeader;
 
   aCommand := RequestCommand(ARequest);
 
   if aCommand <> nil then
   begin
     try
+      if not aCommand.SkipHeader then
+        _ReceiveHeader;
+
       Result := aCommand.Execute;
       Result.Status := Result.Status + [mrSuccess];
     finally
@@ -1710,11 +2195,15 @@ begin
   end
   else
   begin
-    aHandled := False;
-    InternalError(ARequest, aHandled);
+    Result := InternalExecute(ARequest);
+    if mrError in Result.Status then
+    begin
+      aHandled := False;
+      InternalError(ARequest, aHandled);
 
-    if not aHandled then
-      raise TmodModuleException.Create('Can not find command or fallback command: ' + ARequest.Command);
+      if not aHandled then
+        raise TmodModuleException.Create('Can not find command or fallback command: ' + ARequest.Command);
+    end;
   end;
 end;
 
@@ -1734,12 +2223,17 @@ begin
   FAliasName := AValue;
 end;
 
+function TmodModule.SkipHeader: Boolean;
+begin
+  Result := False;
+end;
+
 function TmodModule.GetActive: Boolean;
 begin
   Result := Modules.Active; //todo
 end;
 
-function TmodModule.RegisterCommand(vName: String; CommandClass: TmodCommandClass; AFallback: Boolean): Integer;
+function TmodModule.RegisterCommand(vName: String; CommandClass: TwebCommandClass; AFallback: Boolean): Integer;
 begin
 {  if Active then
     raise TmodModuleException.Create('Server is Active');}
@@ -1772,6 +2266,21 @@ begin
     Result := False;
 end;
 
+function TmodModules.Find(const AName: string): TmodModule;
+var
+  i: Integer;
+begin
+  Result := nil;
+  for i := 0 to Count - 1 do
+  begin
+    if SameText(Items[i].Name, AName) then
+    begin
+      Result := Items[i];
+      break;
+    end;
+  end;
+end;
+
 procedure TmodModules.SetEndOfLine(AValue: String);
 begin
   if FEndOfLine = AValue then
@@ -1789,6 +2298,14 @@ begin
   for aModule in Self do
     aModule.Start;
   FActive := True;
+end;
+
+procedure TmodModules.Started;
+var
+  aModule: TmodModule;
+begin
+  for aModule in Self do
+    aModule.Started;
 end;
 
 procedure TmodModules.Stop;
@@ -1836,12 +2353,7 @@ begin
   Server.Listener.Log(S);
 end;
 
-function TmodModules.CheckRequest(const ARequest: string): Boolean;
-begin
-  Result := True;
-end;
-
-function TmodModules.Compare(Left, Right: TmodModule): Integer;
+function TmodModules.Compare(Left: TmodModule; Right: TmodModule): Integer;
 begin
   Result := Left.Level - Right.Level;
 end;
@@ -1863,11 +2375,11 @@ begin
   Result := TmodRequest.Create(nil, Astream);
 end;
 
-procedure TmodModules.ParseHead(ARequest: TmodRequest; const RequestLine: String);
+procedure TmodModules.ParseHead(ARequest: TmodRequest; const AHead: String);
 begin
   ARequest.Clear;
-  ARequest.Raw := RequestLine;
-  ParseRaw(RequestLine, ARequest.Info.Method, ARequest.Info.Protocol, ARequest.Info.URI);
+  ARequest.Raw := AHead;
+  ParseHttpHead(AHead, ARequest.Info.Method, ARequest.Info.URI, ARequest.Info.Protocol);
   ParseURI(ARequest.URI, ARequest.Info.Address, ARequest.Info.Query);
 
   //zaher: @zaher,belal, I dont like it
@@ -1878,6 +2390,8 @@ begin
 
   StrToStrings(ARequest.Path, ARequest.Route, ['/']);
 
+  //ARequest.Command := ARequest.Method;
+
 {  if (ARequest.Address<>'') and (ARequest.Address<>'/') then
   begin
     if StartsText(URLPathDelim, ARequest.Address) then
@@ -1885,7 +2399,6 @@ begin
     else
       StrToStrings(ARequest.Address, ARequest.Route, ['/']);
   end;}
-
 end;
 
 function TmodModules.Match(ARequest: TmodRequest): TmodModule;
@@ -1963,6 +2476,153 @@ begin
   end;
 end;
 
+{ TmnwCookie }
+
+procedure TmnwCookie.SetChanged;
+begin
+  FChanged := True;
+end;
+
+procedure TmnwCookie.Created;
+begin
+  inherited;
+  FAge := -1; //Forever
+  Secured := False; //over HTTP and HTTPS
+end;
+
+procedure TmnwCookie.Delete;
+begin
+  FDeleting := True;
+  SetChanged;
+end;
+
+function TmnwCookie.GenerateValue: string;
+begin
+  //aDate := IncSecond(Now, Age);
+  Result := Value;
+  if FDeleting or (Result = '') then //Delete it
+  begin
+    Result := Result + '; max-age=0';
+  end
+  else
+  begin
+    if Age >= 0 then
+      Result := Result + '; max-age=' + Age.ToString;
+  end;
+
+  if Secured then
+    Result := Result + '; Secure';
+
+  if Stricted then
+    Result := Result + '; SameSite=Strict'
+  else
+    Result := Result + '; SameSite=None';
+
+  if Domain <> '' then
+    Result := Result + '; Domain=' + Domain.ToLower;
+
+  if Path <> '' then
+    Result := Result + '; Path=' + Path.ToLower
+  else
+    Result := Result + '; Path=/';
+
+end;
+
+procedure TmnwCookie.ResetChanged;
+begin
+  FChanged := False;
+end;
+
+function TmnwCookie.GetText: string;
+begin
+  Result := Name + '=' + GenerateValue;;
+end;
+
+procedure TmnwCookie.SetAge(const AValue: Integer);
+begin
+  if FAge <> AValue then
+  begin
+    FAge := AValue;
+    SetChanged;
+  end;
+end;
+
+procedure TmnwCookie.SetDomain(const AValue: string);
+begin
+  if not SameText(FDomain, AValue) then
+  begin
+    FDomain := AValue;
+    SetChanged;
+  end;
+end;
+
+procedure TmnwCookie.SetPath(const AValue: string);
+begin
+  if not SameText(FPath, AValue) then
+  begin
+    FPath := AValue;
+    SetChanged;
+  end;
+end;
+
+procedure TmnwCookie.SetValue(const AValue: string);
+begin
+  if not SameText(Value, AValue) then
+  begin
+    inherited SetValue(AValue);
+    SetChanged;
+  end;
+end;
+
+{ TmnwCookies }
+
+procedure CookiesStrToStringsDeqouteCallbackProc(Sender: Pointer; Index, CharIndex, NextIndex: Integer; S: string; var Resume: Boolean);
+var
+  Name, Value: string;
+  p: Integer;
+begin
+  if s <> '' then
+  begin
+    s := Trim(s);
+    if s <> '' then
+    begin
+      p := pos('=', s);
+      if p >= 0 then
+      begin
+        Name := Copy(s, 1, p - 1);
+        Value := DequoteStr(Copy(s, p + 1, MaxInt));
+      end
+      else
+      begin
+        Name := S;
+        Value := '';
+      end;
+      (TObject(Sender) as TmnwCookies).Add(Name, Value);
+    end;
+  end;
+end;
+
+procedure TmnwCookies.SetRequestText(S: string);
+var
+  MatchCount: Integer;
+begin
+  Clear;
+  StrToStringsExCallback(S, 0, Self, [';'], MatchCount, CookiesStrToStringsDeqouteCallbackProc, [' ', #0, #13, #10]);
+end;
+
+function TmnwCookies.GetRequestText: string;
+var
+  Cookie: TmnwCookie;
+begin
+  Result := '';
+  for Cookie in Self do
+  begin
+    if Result <> '' then
+      Result := Result + '; ';
+    Result := cookie.Name + '=' + Cookie.Value;
+  end;
+end;
+
 { TmodCommunicate }
 
 procedure TmodCommunicate.Clear;
@@ -1980,8 +2640,8 @@ begin
   inherited Create;
   FParent := ACommand;
   FHeader := TmodHeader.Create;
-  FCookies := TStringList.Create;
-  FCookies.Delimiter := ';';
+  FCookies := TmnwCookies.Create;
+  //FCookies.Delimiter := ';';
   FStreamControl := TmodCommunicateStreamControl.Create;
   FStreamControl.FCommunicate := Self;
 end;
@@ -2006,6 +2666,7 @@ end;
 procedure TmodCommunicate.ReceiveHead;
 begin
   Stream.ReadUTF8Line(FHead);
+  Header.FStates := Header.FStates + [resHeadReceived];
 end;
 
 procedure TmodCommunicate.ReceiveHeader(WithHead: Boolean);
@@ -2016,6 +2677,7 @@ begin
 	  ReceiveHead;
   Header.Clear;
   Header.ReadHeader(Stream);
+  Header.FStates := Header.FStates + [resHeaderReceived];
   DoHeaderReceived;
 end;
 
@@ -2027,7 +2689,7 @@ begin
     raise TmodModuleException.Create('Head is sent');
 
   if Head = '' then
-    raise TmodModuleException.Create('Head not set');
+    raise TmodModuleException.Create('Head is not set');
 
   Stream.WriteUTF8Line(Head);
   Header.FStates := Header.FStates + [resHeadSent];
@@ -2067,12 +2729,17 @@ begin
     Cookies.Values[vName] := Value;
 end;
 
+procedure TmodCommunicate.SetCookie(const vName, Value: string);
+begin
+  SetCookie('', vName, Value);
+end;
+
 procedure TmodCommunicate.SetHead(const Value: string);
 begin
   FHead := Value;
 end;
 
-function TmodCommunicate.GetLatch: Boolean;
+{function TmodCommunicate.GetLatch: Boolean;
 begin
   Result := resLatch in Header.FStates;
 end;
@@ -2083,7 +2750,7 @@ begin
     Header.FStates := Header.FStates + [resLatch]
   else
     Header.FStates := Header.FStates - [resLatch];
-end;
+end;}
 
 procedure TmodCommunicate.Reset;
 begin
@@ -2145,7 +2812,7 @@ end;
 procedure TmodCommunicate.AddHeader(const AName, AValue: String);
 begin
   if resHeaderSent in Header.States then
-    raise TmodModuleException.Create('Header is already sent');
+    raise TmodModuleException.Create('Header is already sent: '+ Head);
 
   Header.Add(AName, AValue);
 end;
@@ -2164,8 +2831,8 @@ begin
   begin
     FWritingStarted := True;
     try
-      if resLatch in Header.States then
-        raise TmodModuleException.Create('You can''t send data at this phase'); //maybe before sending header
+      {if resLatch in Header.States then
+        raise TmodModuleException.Create('You can''t send data at this phase'); //maybe before sending header}
       if not (resHeaderSending in Header.States) and not (resHeaderSent in Header.States) then
         SendHeader(True);
     finally
@@ -2193,10 +2860,54 @@ end;
 
 function TmnRoute.GetRoute(vIndex: Integer): string;
 begin
-  if vIndex<Count then
+  if vIndex < Count then
     Result := Strings[vIndex]
   else
     Result := '';
+end;
+
+{ THttpResultHelper }
+
+procedure TmodAnswerHelper.FromNumber(Number: Integer);
+begin
+  case Number of
+    0: Self := hrNone;
+    101: Self := hrSwitchingProtocols;
+    200: Self := hrOK;
+    204: Self := hrNoContent;
+    301: Self := hrMovedPermanently;
+    302: Self := hrRedirect;
+    304: Self := hrNotModified;
+    307: Self :=  hrMovedTemporarily;
+    401: Self := hrUnauthorized;
+    403: Self := hrForbidden;
+    404: Self := hrNotFound;
+    500: Self := hrError;
+    503: Self := hrServiceUnavailable;
+    else
+      Self := hrCustom;
+  end;
+end;
+
+function TmodAnswerHelper.ToString: string;
+begin
+  Result := 'HTTP/1.1 ';
+  case Self of
+    hrNone: Result := '';
+    hrOK: Result := Result + '200 OK';
+    hrSwitchingProtocols: Result := Result + '101 Switching Protocols';
+    hrNoContent: Result := Result + '204 No Content';
+    hrMovedPermanently: Result := '301 Moved Permanently';
+    hrRedirect: Result := Result + '302 Found';
+    hrNotModified: Result := Result + '304 Not Modified';
+    hrMovedTemporarily: Result := Result + '307 Temporary Redirect';
+    hrUnauthorized: Result := Result + '401 Unauthorized';
+    hrForbidden : Result := Result + '403 Forbidden';
+    hrNotFound: Result := Result + '404 NotFound';
+    hrError: Result := Result + '500 Internal Server Error';
+    hrServiceUnavailable: Result := Result + '503 Service Unavailable';
+    hrCustom: Result := '';
+  end;
 end;
 
 { TmodHeader }
@@ -2216,6 +2927,13 @@ begin
     Result := ExtractDomain(s)
   else
     Result := '';
+end;
+
+function TmodHeader.Host: string;
+begin
+  Result := Self['Host'];
+  if Result = '' then
+    Result := 'localhost';
 end;
 
 function TmodHeader.Origin: string;
@@ -2246,25 +2964,31 @@ end;
 procedure TwebRequest.Created;
 begin
   inherited;
+  Accept := '*/*';
+  UserAgent := sUserAgent;
 end;
 
 procedure TwebRequest.DoHeaderReceived;
 var
   aChunked: Boolean;
-  aCompressClass: TmnCompressStreamProxyClass;
+  //aCompressClass: TmnCompressStreamProxyClass;
 begin
   inherited;
+
+  FHost  := Header.Field['Host'].AsString;
 
   if (Header.Field['Content-Length'].IsExists) then
     ContentLength := Header.Field['Content-Length'].AsInt64;
 
-  Cookies.DelimitedText := Header['Cookie'];
+  Cookies.SetRequestText(Header['Cookie']);
 
   FAccept := Header.ReadString('Connection');
   KeepAlive := (Use.KeepAlive = ovUndefined) and SameText(Header.ReadString('Connection'), 'Keep-Alive');
   KeepAlive := KeepAlive or ((Use.KeepAlive = ovYes) and not SameText(Header.ReadString('Connection'), 'close'));
 
   aChunked := Header.Field['Transfer-Encoding'].Have('chunked', [',']);
+
+  Stamp  := Header.Field['If-None-Match'].AsString;
 
   {aCompressClass := nil;
   if (Header.Field['Content-Encoding'].IsExists) then
@@ -2276,13 +3000,21 @@ begin
   end;
   InitProxies(aChunked, aCompressClass);}
 
+  FMode := [];
+
   if Header.Field['Content-Encoding'].Have('gzip', [',']) then
     FMode := FMode + [smRequestCompress];
 
   if (Header.Field['Accept-Encoding'].Have('gzip', [','])) then
   begin
     case Use.Compressing of
-      ovYes: FMode := FMode + [smRespondCompress];
+      ovYes:
+      begin
+        if KeepAlive then  //when keep alive we need content length
+          FMode := FMode + [smAllowCompress]
+        else
+          FMode := FMode + [smRespondCompressing];
+      end;
       ovUndefined: FMode := FMode + [smAllowCompress];
       else
       begin
@@ -2291,7 +3023,7 @@ begin
     end;
   end;
 
-  if (smRequestCompress in Mode) or (smRespondCompress in Mode) then
+  if (smRequestCompress in Mode) or (smRespondCompressing in Mode) then
   begin
     InitProxies(aChunked, TmnGzipStreamProxy);
     if not (smRequestCompress in Mode) then
@@ -2333,7 +3065,9 @@ begin
     PutHeader('Accept-Encoding', 'gzip, deflate');
 
   if (Use.Compressing = ovYes) then //to send data by request (post)
-    PutHeader('Content-Encoding', 'gzip');
+    PutHeader('Content-Encoding', 'gzip'); //TODO nope
+
+  PutHeader('User-Agent', UserAgent);
 end;
 
 procedure TwebRequest.DoSendHeader;
@@ -2341,7 +3075,7 @@ var
   s: UTF8String;
 begin
   inherited;
-  s := UTF8Encode(Cookies.DelimitedText);
+  s := UTF8Encode(Cookies.GetRequestText);
   if s <> '' then
     Stream.WriteUTF8Line('Cookie: ' + s);
 end;
@@ -2354,7 +3088,7 @@ begin
 
   if Request.CompressProxy<>nil then
   begin
-    Request.CompressProxy.Enabled := smRespondCompress in Request.Mode;
+    Request.CompressProxy.Enabled := smRespondCompressing in Request.Mode;
     Request.CompressProxy.Limit := 0;
   end;
 end;
@@ -2372,7 +3106,7 @@ begin
     ContentType  := Header.Field['Content-Type'].AsString;
 
   if (Header.Field['ETag'].IsExists) then
-    ETag  := Header.Field['ETag'].AsString; //* or maybe 'If-None-Match'
+    Stamp  := Header.Field['ETag'].AsString; //* or maybe 'If-None-Match'
 
   if (Header.Field['Connection'].IsExists) then
     KeepAlive := SameText(Header['Connection'], 'Keep-Alive');
@@ -2390,35 +3124,55 @@ begin
 
   Request.InitProxies(aChunked, aCompressClass);
 
-  if aCompressClass<>nil then
+  if (aCompressClass<>nil)and KeepAlive then
     Request.CompressProxy.Limit := ContentLength;
 end;
 
 procedure TwebRespond.DoPrepareHeader;
 begin
   inherited;
-  if (ContentLength > 0) then
+  PutHeader('server', sMiniLibServer);
+
+  if (ContentLength > 0) {and (smRespondCompressing in Mode)} then //if we use proxies we cant send content length
     PutHeader('Content-Length', IntToStr(ContentLength));
+
   if (ContentType <> '') then
     PutHeader('Content-Type', ContentType);
 
-  if (ETag <> '') then
-    PutHeader('ETag', ETag);
+  if (Stamp <> '') then
+    PutHeader('ETag', Stamp);
 
-  if smRespondCompress in Request.Mode then
+  if smRespondCompressing in Request.Mode then
       PutHeader('Content-Encoding', Request.CompressProxy.GetCompressName);
+
+  if Location <> '' then
+    PutHeader('Location', Location)
 end;
 
 procedure TwebRespond.DoSendHeader;
 var
-  s: string;
+  Cookie: TmnwCookie;
 begin
   inherited;
-  if Cookies.Count <> 0 then
+  if Cookies.Count > 0 then
   begin
-    for s in Cookies do
-      Stream.WriteUTF8Line('Set-Cookie: ' + s);
+    for Cookie in Cookies do
+      Stream.WriteUTF8Line('Set-Cookie: ' + Cookie.GetText);
   end;
+end;
+
+procedure TmodRespond.SetAnswer(const Value: TmodAnswer);
+begin
+  if resHeaderSent in Header.States then
+    raise TmodModuleException.Create('Header is already sent');
+  FAnswer := Value;
+  FHead := Answer.ToString;
+end;
+
+procedure TmodRespond.SetHead(const Value: string);
+begin
+  inherited;
+  FAnswer := hrCustom;
 end;
 
 function TwebRespond.StatusCode: Integer;
@@ -2460,6 +3214,21 @@ begin
   end;
 end;
 
+{class operator TmodOptionValueHelper.Explicit(const Source: Boolean): TmodOptionValue;
+begin
+  Result.AsBoolean := Source;
+end;
+
+class operator TmodOptionValueHelper.Implicit(Source: Boolean): TmodOptionValue;
+begin
+  Result.AsBoolean := Source;
+end;
+
+class operator TmodOptionValueHelper.Implicit(Source: TmodOptionValue): Boolean;
+begin
+  Result := Source.AsBoolean;
+end;}
+
 procedure TmodOptionValueHelper.SetAsBoolean(const Value: Boolean);
 begin
   if Value then
@@ -2485,7 +3254,6 @@ end;
 constructor TmnCustomClientCommand.Create;
 begin
   inherited Create;
-
 end;
 
 { TStreamModeHelper }
@@ -2500,9 +3268,9 @@ begin
   Result := smRequestCompress in Self;
 end;
 
-function TStreamModeHelper.RespondCompress: Boolean;
+function TStreamModeHelper.RespondCompressing: Boolean;
 begin
-  Result := smRespondCompress in Self;
+  Result := smRespondCompressing in Self;
 end;
 
 { Pool }
@@ -2588,7 +3356,6 @@ end;
 
 procedure TmnPoolThread.Execute;
 begin
-  inherited;
   FPool.TerminateSet;
 end;
 
@@ -2748,27 +3515,23 @@ begin
   FWaitEvent.WaitFor;
 end;
 
-{ TStreamPersistWrapper }
+{ TInterfacedStreamtWrapper }
 
-class function TStreamPersistWrapper.CreateInterface(vStream: TStream): ImnStreamPersist;
-var
-  aObj: TStreamPersistWrapper;
+constructor TInterfacedStreamtWrapper.Create(vStream: TStream);
 begin
-  aObj := TStreamPersistWrapper.Create;
-  aObj.FStream := vStream;
-  Result := aObj;
+  inherited Create;
+  FStream := vStream;
 end;
 
-procedure TStreamPersistWrapper.LoadFromStream(Stream: TStream; Count: Int64);
+procedure TInterfacedStreamtWrapper.LoadFromStream(Stream: TStream; Count: Int64);
 begin
   FStream.CopyFrom(Stream,Count);
 end;
 
-procedure TStreamPersistWrapper.SaveToStream(Stream: TStream; Count: Int64);
+procedure TInterfacedStreamtWrapper.SaveToStream(Stream: TStream; Count: Int64);
 begin
   Stream.CopyFrom(FStream, Count);
 end;
 
 initialization
-  DefFormatSettings := TFormatSettings.Invariant;
 end.

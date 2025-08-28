@@ -30,7 +30,7 @@ type
     Input1: THTML.TInput;
     Input2: THTML.TInput;
     Input3: THTML.TInput;
-    procedure DoAccept(var Resume: Boolean); override;
+    procedure DoAccept(const AContext: TmnwContext; var Resume: Boolean); override;
     procedure DoCompose; override;
   public
     class function GetCapabilities: TmnwSchemaCapabilities; override;
@@ -87,7 +87,7 @@ type
   public
   end;
 
-  TWSEchoGetHomeCommand = class(TmodHttpCommand)
+  TWSEchoGetHomeCommand = class(TwebCommand)
   protected
   public
     procedure RespondResult(var Result: TmodRespondResult); override;
@@ -203,7 +203,8 @@ end;
 
 { TWellcomeSchema }
 
-procedure TWelcomeSchema.DoAccept(var Resume: Boolean);
+procedure TWelcomeSchema.DoAccept(const AContext: TmnwContext;
+  var Resume: Boolean);
 begin
   Resume := True;
 end;
@@ -270,7 +271,7 @@ begin
           begin
             Name := 'logo';
             Route := 'logo';
-            LoadFromFile(IncludePathDelimiter(Schema.HomePath) + 'logo.png');
+            LoadFromFile(IncludePathDelimiter(Schema.GetHomePath) + 'logo.png');
           end;
 
 {          with TImage.Create(This) do
@@ -323,7 +324,7 @@ begin
             Route := 'clock';
             OnCompose := procedure(Inner: TmnwElement; AResponse: TmnwResponse)
             begin
-              AResponse.ETag := TimeToStr(Now);
+              AResponse.Stamp:= TimeToStr(Now);
               TParagraph.Create(Inner, TimeToStr(Now));
               {with TImage.Create(Inner) do
               begin
@@ -379,9 +380,9 @@ begin
     begin
       aUsername := AContext.Data.Values['username'];
       aPassword := AContext.Data.Values['password'];
-      AResponse.SessionID := aUsername +'/'+ aPassword;
+      AResponse.Session.Value := aUsername +'/'+ aPassword;
       AResponse.Resume := False;
-      AResponse.HttpResult := hrRedirect;
+      AResponse.Answer := hrRedirect;
       AResponse.Location := IncludePathDelimiter(AContext.GetPath) + 'dashboard';
     end;
   end;
@@ -513,9 +514,9 @@ begin
     begin
       aUsername := AContext.Data.Values['username'];
       aPassword := AContext.Data.Values['password'];
-      AResponse.SessionID := aUsername +'/'+ aPassword;
+      AResponse.Session.Value := aUsername +'/'+ aPassword;
       AResponse.Resume := False;
-      AResponse.HttpResult := hrRedirect;
+      AResponse.Answer := hrRedirect;
       AResponse.Location := IncludePathDelimiter(AContext.GetPath) + 'dashboard';
     end;
   end;
@@ -772,8 +773,8 @@ end;
 
 procedure TFilesSchema.DoCompose;
 begin
-  inherited DoCompose;
-  ServeFiles := True;
+  inherited;
+  ServeFiles := [serveAllow, serveDefault, serveIndex];
   HomePath := IncludePathDelimiter(App.HomePath) + 'files';
 end;
 
@@ -807,7 +808,6 @@ procedure THomeModule.CreateItems;
 begin
   inherited;
   WebApp.RegisterSchema('welcome', TWelcomeSchema);
-  WebApp.RegisterSchema('assets', TAssetsSchema);
   WebApp.RegisterSchema('login', TLoginSchema);
   WebApp.RegisterSchema('demo', TDemoSchema);
   WebApp.RegisterSchema('simple', TSimpleSchema);

@@ -39,8 +39,8 @@ type
     FProtocol: UTF8String;
 
     FStream: TmnConnectionStream;
-    function GetRequest: TmodHttpRequest;
-    function GetRespond: TmodHttpRespond;
+    function GetRequest: TwebRequest;
+    function GetRespond: TwebRespond;
   protected
     function DoCreateStream(const vURL: UTF8String; out vProtocol, vHost, vPort, vParams: UTF8String): TmnConnectionStream; virtual; abstract;
 
@@ -84,7 +84,7 @@ type
     function ReadStream(AStream: TStream; Count: Integer): TFileSize; overload;
     function ReadToFile(const OutFileName: UTF8String; Count: Integer = -1): TFileSize; overload;
 
-    procedure ReceiveStream(AStream: TStream); overload;
+    function ReceiveStream(AStream: TStream): TFileSize; overload;
     procedure ReceiveMemoryStream(AStream: TStream);
     procedure Disconnect;
 
@@ -103,8 +103,8 @@ type
     property Port: UTF8String read FPort write FPort;
     property Path: UTF8String read FPath write FPath;
     property Stream: TmnConnectionStream read FStream;
-    property Request: TmodHttpRequest read GetRequest;
-    property Respond: TmodHttpRespond read GetRespond;
+    property Request: TwebRequest read GetRequest;
+    property Respond: TwebRespond read GetRespond;
   end;
 
   { TmnCustomHttpStream }
@@ -334,7 +334,7 @@ end;
 
 procedure TmnCustomHttpClient.SendCommand(Command: string; vData: PByte; vCount: Cardinal);
 begin
-  Request.Head := Command + ' ' + Path + ' ' + ProtocolVersion;
+  Request.Head := Command + ' ' + Path + ' ' + sHTTPProtocol1;
 
   if Request.Use.Compressing<>ovYes then
     Request.ContentLength := vCount;
@@ -433,13 +433,13 @@ end;
 
 function TmnCustomHttpClient.CreateRequest(AStream: TmnConnectionStream): TmodRequest;
 begin
-  Result := TmodhttpRequest.Create(Self, AStream);
+  Result := TwebRequest.Create(Self, AStream);
   Result.Use.AcceptCompressing := ovYes;
 end;
 
 function TmnCustomHttpClient.CreateRespond: TmodRespond;
 begin
-  Result := TmodHttpRespond.Create(Request);
+  Result := TwebRespond.Create(Request);
 end;
 
 destructor TmnCustomHttpClient.Destroy;
@@ -531,6 +531,11 @@ begin
   end;
 end;
 
+function TmnCustomHttpClient.ReceiveStream(AStream: TStream): TFileSize;
+begin
+  Result := Respond.ReceiveStream(AStream);
+end;
+
 function TmnCustomHttpClient.ReadStream(AStream: TStream): TFileSize;
 begin
   if (Request.ChunkedProxy<>nil) and (Respond.ContentLength = 0) then
@@ -555,19 +560,6 @@ procedure TmnCustomHttpClient.ReceiveMemoryStream(AStream: TStream);
 begin
   ReceiveStream(AStream);
   AStream.Seek(0, soFromBeginning);
-end;
-
-procedure TmnCustomHttpClient.ReceiveStream(AStream: TStream);
-begin
-  if (Request.ChunkedProxy<>nil) and (Respond.ContentLength = 0) then
-    FStream.ReadStream(AStream, -1)
-  else if (Respond.ContentLength > 0) then
-  begin
-    //Result := FStream.ReadStream(AStream, Respond.ContentLength);
-    Respond.ReceiveData(AStream, Respond.ContentLength);
-  end
-  else
-    FStream.ReadStream(AStream, -1); //read complete stream
 end;
 
 procedure TmnCustomHttpClient.Disconnect;
@@ -654,14 +646,14 @@ begin
   OutStream.Seek(0, soFromBeginning);
 end;
 
-function TmnCustomHttpClient.GetRequest: TmodHttpRequest;
+function TmnCustomHttpClient.GetRequest: TwebRequest;
 begin
-  Result := inherited Request as TmodHttpRequest;
+  Result := inherited Request as TwebRequest;
 end;
 
-function TmnCustomHttpClient.GetRespond: TmodHttpRespond;
+function TmnCustomHttpClient.GetRespond: TwebRespond;
 begin
-  Result := inherited Respond as TmodHttpRespond;
+  Result := inherited Respond as TwebRespond;
 end;
 
 procedure TmnCustomHttpClient.SendFile(const vURL: UTF8String; AFileName: UTF8String);
@@ -687,7 +679,7 @@ begin
   aStream.Address := vHost;
   aStream.Port := vPort;
 
-  aStream.Options := aStream.Options + [soNoDelay];
+  aStream.Options := aStream.Options;
   if SameText(Protocol, 'https') or SameText(Protocol, 'wss') then
     aStream.Options := aStream.Options + [soSSL, soWaitBeforeRead]
   else

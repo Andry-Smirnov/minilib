@@ -8,9 +8,11 @@ unit mnClients;
  *}
 
 {$M+}{$H+}
-{$IFDEF FPC}
+{$ifdef fpc}
 {$mode delphi}
-{$ENDIF}
+{$else
+{$WARN DUPLICATE_CTOR_DTOR OFF}
+{$endif}
 
 interface
 
@@ -39,9 +41,10 @@ type
   protected
     function CreateSocket(out vErr: Integer): TmnCustomSocket; override;
   public
-    constructor Create(const vAddress: string = ''; vPort: string = ''; vOptions: TmnsoOptions = [soNoDelay]); overload;
+    constructor Create(const vAddress: string; vPort: string; vOptions: TmnsoOptions = []); overload;
+    constructor Create(const vAddress: string; vOptions: TmnsoOptions = []); overload;
     //Host can have port separated with :
-    constructor CreateBy(const vHost: string; vDefPort: string; vOptions: TmnsoOptions = [soNoDelay]); overload;
+    constructor CreateBy(const vHost: string; vDefPort: string; vOptions: TmnsoOptions = []); overload; deprecated;
     property Port: string read FPort write SetPort;
     property Address: string read FAddress write SetAddress;
     property BindAddress: string read FBindAddress write SetBindAddress;
@@ -52,7 +55,7 @@ type
 
   { TmnClientConnection }
 
-  TmnClientConnection = class(TmnConnection) //this child object in Clients
+  TmnClientConnection = class(TmnConnection) //this child object in Clients/Server.Listener
   private
     function GetOwner: TmnClients;
   protected
@@ -78,11 +81,6 @@ type
     constructor Create(vOwner: TmnConnections);
     destructor Destroy; override;
     property Lock: TCriticalSection read GetLock;
-  end;
-
-  TmnJobClient = class(TmnClient)
-  public
-    constructor Create(vOwner: TmnConnections; JobObject: TObject);
   end;
 
   TmnClientConnectionClass = class of TmnClientConnection;
@@ -326,6 +324,14 @@ end;
 
 { TmnClientSocket }
 
+constructor TmnClientSocket.Create(const vAddress: string; vOptions: TmnsoOptions);
+var
+  aAddress, aPort: string;
+begin
+  SpliteStr(vAddress, ':', aAddress, aPort);
+  Create(aAddress, aPort, vOptions);
+end;
+
 constructor TmnClientSocket.CreateBy(const vHost: string; vDefPort: string; vOptions: TmnsoOptions);
 var
   aAddress, aPort: string;
@@ -392,11 +398,4 @@ begin
   FPort := Value;
 end;
 
-{ TmnJobClient }
-
-constructor TmnJobClient.Create(vOwner: TmnConnections; JobObject: TObject);
-begin
-end;
-
 end.
-

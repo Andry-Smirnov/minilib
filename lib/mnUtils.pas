@@ -27,11 +27,13 @@ uses
   Classes, SysUtils, StrUtils, DateUtils, Types, Character;
 
 const
-  sUTF8BOM: array[1..3] of Char = (#$EF, #$BB, #$BF);
+  sUTF8BOM: array[1..3] of AnsiChar = (#$EF, #$BB, #$BF);
   {$ifdef FPC}
   {$else}
   JulianEpoch = TDateTime(-2415018.5);  //check EpochAsJulianDate
   {$endif}
+
+  URLPathDelim  = '/';
 
 procedure Nothing;
 {
@@ -78,7 +80,8 @@ function StrToStringsEx(const Content: string; Strings: TStrings; Separators: Ar
 procedure StrToStringsCallbackProc(Sender: Pointer; Index: Integer; S: string; var Resume: Boolean);
 procedure StrToStringsDequoteCallbackProc(Sender: Pointer; Index:Integer; S: string; var Resume: Boolean);
 
-function StrScanTo(const Content: string; FromIndex: Integer; out S: string; out CharIndex, NextIndex, MatchCount: Integer; const Separators: array of string; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Boolean;
+function StrScanTo(const Content: string; FromIndex: Integer; out S: string; out CharIndex, NextIndex, MatchCount: Integer; const Separators: array of string; const IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Boolean; overload;
+//function StrScanTo(const Content: string; FromIndex: Integer; out S: string; NextIndex, const Separators: array of string; const IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Boolean; overload;
 
 {
   examples:
@@ -116,13 +119,17 @@ procedure ParseCommandArguments(Arguments: TStrings; KeyValues: TArray<string> =
   -w=value
 }
 
+//Command is not have value not a switch, it not started with - and not ended with : or =
+function GetArgumentCommand(Strings: TStrings; out CommandName: string; out Index: Integer): Boolean; overload;
 //SwitchName: Use switch char too, like `-demon`
-function GetArgumentValue(Strings: TStrings; out Value: String; SwitchName: string; AltSwitchName: string = ''): Boolean; overload;
+//Switch started with - or -- notice -- with considered as - too
 function GetArgumentSwitch(Strings: TStrings; SwitchName: string; AltSwitchName: string = ''): Boolean; overload;
+//Value from name or switch both acceptable, --name:value or name:value
+function GetArgumentValue(Strings: TStrings; out Value: String; SwitchName: string; AltSwitchName: string = ''): Boolean; overload;
 
-//Get Param (non switch value by index)
+//Get Value from any thing have value by index `name1=value --name2=value`
 function GetArgument(Strings: TStrings; out Value: String; Index: Integer): Boolean; overload;
-
+//Get all values
 function GetArgument(Strings: TStrings; OutStrings: TStrings; AltSwitch: string = ''): Boolean; overload;
 function GetArgument(Strings: TStrings; out OutStrings: TArray<String>): Boolean; overload;
 
@@ -141,12 +148,16 @@ function SubStr(const Str: String; vSeperator: Char; vFromIndex, vToIndex: Integ
 function SubStr(const Str: String; vSeperator: Char; vIndex: Integer = 0): String; overload;
 
 function StrHave(S: string; Separators: TSysCharSet): Boolean; deprecated;
-procedure SpliteStr(const S, Separator: string; out Name, Value: string);
+
+//if S is same Name variabled passed, it empty it both, so i will use `var` not `out`
+procedure SpliteStr(S, Separator: string; var Name:string; var Value: string); inline;
 
 function FetchStr(var AInput: string; const ADelim: string = '.'; const ADelete: Boolean = True; const ACaseSensitive: Boolean = True): string; deprecated;
 
-function StrInArray(const Str: String; const InArray : Array of String; CaseInsensitive: Boolean = False) : Boolean; overload;
-function StrInArray(const Str: string; const StartIndex: Integer; const InArray: array of string; out SepLength: Integer; CaseInsensitive: Boolean = False): Boolean; overload;
+function StrInArray(const Str: String; const InArray : Array of String; CaseInsensitive: Boolean = False) : Integer; overload;
+function IsStrInArray(const Str: String; const InArray : Array of String; CaseInsensitive: Boolean = False) : Boolean; overload;
+function StrInArray(const Str: string; const StartIndex: Integer; const InArray: array of string; out SepLength: Integer; CaseInsensitive: Boolean = False): Integer; overload;
+function IsStrInArray(const Str: string; const StartIndex: Integer; const InArray: array of string; out SepLength: Integer; CaseInsensitive: Boolean = False): Boolean; overload;
 function CharInArray(const C: Char; const ArrayOfChar : array of Char; CaseInsensitive: Boolean = False) : Boolean;
 function CharArrayToSet(const ArrayOfChar : TArray<Char>) : TSysCharSet;
 
@@ -155,9 +166,6 @@ function PeriodToString(vPeriod: Double; WithSeconds: Boolean): string;
 //Used by GetTickCount, return minuts,secons,miliseconds
 function TicksToString(vTicks: Int64): string;
 function DequoteStr(const Str: string; const QuoteChar: string = #0): string;
-function ExcludeTrailing(const Str: string; const TrailingChar: string = #0): string;
-function RemoveEncloseStr(const S, Left, Right: string): string;
-function EncloseStr(const S, Left, Right: string): string;
 
 function RepeatString(const Str: string; Count: Integer): string;
 
@@ -193,9 +201,6 @@ type
 
 function AlignStr(const S: string; Count: Integer; Options: TAlignStrOptions = [alsLeft]; vChar: Char = ' '): string; overload;
 
-function StartsDelimiter(const vFileName: string): Boolean;
-function EndsDelimiter(const vFileName: string): Boolean;
-
 {
   EscapeString: Example
     EscapeString(Text, '\', [#13, #10, #9 , #8, '"'], ['r', 'n', 't', 'b', '"']);
@@ -221,29 +226,51 @@ function DescapeString(const S: string; const Esc: string; Chars: array of Char;
 function EscapeStringC(const S: string): string;
 function DescapeStringC(const S: string): string;
 function ToUnixPathDelimiter(const S: string): string;
-function CorrectPath(const Path: string): string;
+
 function ExpandFile(const Name: string): string;
 
 {
   Useful to make your project path related (Portable)
   FileName:
+          myfile
+          mydir/myfile
           ./myfile
           ../myfile
+
           /myfile
           \myfile
+          \\...\myfile
+
+          c:\temp\myfile
+          /mydir/myfile
   Path:
   Root: is optional, added before Path
 }
 function ExpandToPath(FileName: string; Path: string; Root: string = ''): string;
 
+function CorrectPath(const Path: string): string;
+
 //TODO pascal
 //function EscapeStringPas(const S: string): string;
 //function DescapeStringPas(const S: string): string;
 
+function ExcludeTrailing(const Str: string; const TrailingChar: string = #0): string;
+
 //IncludePathDelimiter add the Delimiter when S not = ''
-function IncludePathDelimiter(const S: string): string;
+function IncludePathDelimiter(const S: string; Force: Boolean = False): string;
 function ExcludePathDelimiter(Path: string): string;
-function IncludeURLDelimiter(const S: string): string;
+
+function IncludeURLDelimiter(const S: string): string; //deprecated 'AddEndURLDelimiter';
+
+//If empty do not add
+function AddStartURLDelimiter(const Path: string; Force: Boolean = False): string; {$ifdef D-}inline;{$endif}
+function AddEndURLDelimiter(const Path: string; Force: Boolean = False): string; {$ifdef D-}inline;{$endif}
+
+function StartsDelimiter(const vFileName: string): Boolean;
+function EndsDelimiter(const vFileName: string): Boolean;
+
+function EncloseStr(const S, Left, Right: string): string;
+function UncloseStr(const S, Left, Right: string): string;
 
 //Similer to ZeroMemory
 procedure InitMemory(out V; Count: {$ifdef FPC}SizeInt{$else}Longint{$endif});
@@ -257,6 +284,10 @@ function ISOStrToDate(ISODate: String; vDateSeparator: Char = '-'; TimeDivider: 
 
 function ISODateToStr(DateTime: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = ' '; TimeSeparator: Char = ':'; WithTime: Boolean = False): String; overload;
 function ISODateTimeToStr(DateTime: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = ' '): String; overload;
+
+//  DateToStr(RFC2822ToDateTime('Thu, 26 Jun 2025 11:08:12 GMT'))
+function RFC2822ToDateTime(data: string): TDateTime;
+function DateTimeToRFC2822(vDate: TDateTime): string;
 
 function DateTimeToRFC822(vDateTime: TDateTime): string;
 
@@ -284,9 +315,10 @@ function StringOfUTF8(const Value: PByte; Size: Integer): string;
 //TODO fix ansi to widestring
 function HexToBin(Text : PByte; Buffer: PByte; BufSize: longint): Integer; overload;
 procedure BinToHex(Buffer: PByte; Text: PByte; BufSize: longint); overload;
-function String2Hex(const vData: string): string; overload;
-function String2Hex(const vData: PByte; vCount: Integer): string; overload;
-function Hex2String(const vData: string): string; overload;
+function StringToHex(const vData: string): string; overload;
+function StringToHex(const vData: PByte; vCount: Integer): string; overload;
+function HexToString(const vData: string): string; overload;
+function UUIDToString(Guid: TGuid; Hyphen: string = '-'): string;
 
 function ByteToBinStr(Value: Byte): string;
 function DataToBinStr(var Data; Size: Integer; Separator: string = ''): string;
@@ -321,6 +353,7 @@ procedure CenterRect(var R1: TRect; R2: TRect);
 
 var
   SystemAnsiCodePage: Cardinal; //used to convert from Ansi string, it is the default
+  DefFormatSettings : TFormatSettings;
 
 implementation
 
@@ -412,7 +445,7 @@ begin
     Result := Str;
 end;
 
-function RemoveEncloseStr(const S, Left, Right: string): string;
+function UncloseStr(const S, Left, Right: string): string;
 var
   start, count: Integer;
 begin
@@ -442,6 +475,16 @@ begin
   end
   else
     Result := '';
+end;
+
+function UUIDToString(Guid: TGuid; Hyphen: string): string;
+begin
+  Result := LowerCase(
+            IntToHex(Longint(GUID.D1), 8) + Hyphen + IntToHex(GUID.D2, 4) + Hyphen + IntToHex(GUID.D3, 4)
+            + Hyphen + IntToHex(GUID.D4[0], 2) + Hyphen + IntToHex(GUID.D4[1], 2) + Hyphen + IntToHex(GUID.D4[2], 2) + Hyphen + IntToHex(GUID.D4[3], 2)
+            + Hyphen + IntToHex(GUID.D4[4], 2) + Hyphen + IntToHex(GUID.D4[5], 2) + Hyphen + IntToHex(GUID.D4[6], 2) + Hyphen + IntToHex(GUID.D4[7], 2)
+            )
+//  Result := LowerCase(RemoveEncloseStr(GUIDToString(Guid), '{', '}'));
 end;
 
 function AlignStr(const S: string; Count: Integer; Options: TAlignStrOptions; vChar: Char): string;
@@ -791,7 +834,7 @@ begin
           begin
             if CharInSet(Content[Cur], Quotes) then
               break
-            else if (StrInArray(Content, Cur, Separators, SepLength)) then
+            else if (IsStrInArray(Content, Cur, Separators, SepLength)) then
             begin
               Cur := Cur + SepLength - 1;
               Inc(MatchCount);
@@ -869,7 +912,7 @@ begin
   TResultString(Sender^).NextIndex := NextIndex;
 end;
 
-function StrScanTo(const Content: string; FromIndex: Integer; out S: string; out CharIndex, NextIndex, MatchCount: Integer; const Separators: array of string; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet): Boolean;
+function StrScanTo(const Content: string; FromIndex: Integer; out S: string; out CharIndex, NextIndex, MatchCount: Integer; const Separators: array of string; const IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet): Boolean;
 var
   r: TResultString;
 begin
@@ -1102,7 +1145,7 @@ begin
         Name := Copy(Name, 1, Length(Name)-1);
         NextIsValue := True;
       end
-      else if StrInArray(Name, KeyValues) then
+      else if IsStrInArray(Name, KeyValues) then
         NextIsValue := True
       else
       begin
@@ -1132,6 +1175,26 @@ begin
     CallBackProc(Sender, c, Name, Value, StartsText('-', Name), Resume)
 end;
 
+function GetArgumentCommand(Strings: TStrings; out CommandName: string; out Index: Integer): Boolean; overload;
+var
+  I: Integer;
+  S: string;
+begin
+  CommandName := '';
+  Index := -1;
+  for I := 0 to Strings.Count - 1 do
+  begin
+    S := Strings[I];
+    if not StartsText('-', S) and not EndsText('=', S) and not EndsText(':', S) then
+    begin
+      CommandName := S;
+      Index := I;
+      Exit(True);
+    end;
+  end;
+  Result := False;
+end;
+
 procedure ParseCommandArguments(Arguments: TStrings; KeyValues: TArray<string>);
 begin
   ParseCommandArguments(ArgumentsCallbackProc, Arguments, KeyValues);
@@ -1140,7 +1203,7 @@ end;
 function GetArgumentValue(Strings: TStrings; out Value: String; SwitchName: string; AltSwitchName: string = ''): Boolean;
 var
   I, P: Integer;
-  S: string;
+  S, Name: string;
 begin
   if StartsText('--', SwitchName) then
     SwitchName := Copy(SwitchName, 2, MaxInt);
@@ -1154,12 +1217,12 @@ begin
     P := Pos(Strings.NameValueSeparator, S);
     if (P <> 0) then
     begin
-      if (SameText(Copy(S, 1, P - 1), SwitchName))
-        or ((AltSwitchName <> '') and (SameText(Copy(S, 1, P - 1), AltSwitchName))) then
-        begin
-          Value := Copy(S, p + 1, MaxInt);
-          Exit(True);
-        end;
+      Name := Copy(S, 1, P - 1);
+      if (SameText(Name, SwitchName)) or ((AltSwitchName <> '') and (SameText(Name, AltSwitchName))) then
+      begin
+        Value := Copy(S, p + 1, MaxInt);
+        Exit(True);
+      end;
     end;
   end;
 end;
@@ -1191,7 +1254,7 @@ end;
 function GetArgument(Strings: TStrings; out Value: String; Index: Integer): Boolean;
 var
   I, P: Integer;
-  S: string;
+  S, Name: string;
 begin
   Result := False;
   Value := '';
@@ -1201,7 +1264,8 @@ begin
     P := Pos(Strings.NameValueSeparator, S);
     if (P <> 0) then
     begin
-      if (Copy(S, 1, P - 1) = '') then
+      Name := Copy(S, 1, P - 1);
+      if (Name = '') then
       begin
         if Index = 0 then
         begin
@@ -1291,21 +1355,27 @@ end;
 
 function ExpandToPath(FileName: string; Path: string; Root: string): string;
 begin
-  if (FileName <> '') then
-  begin
-    if StartsStr('../', FileName) or StartsStr('..\', FileName) then
-      Result := ExpandFileName(IncludePathDelimiter(Root) + IncludePathDelimiter(Path) + FileName)
-    else if StartsStr('./', FileName) or StartsStr('.\', FileName) then
-      Result := IncludePathDelimiter(Root) + IncludePathDelimiter(Path) + RightStr(FileName, Length(FileName) - 2)
-{$ifdef MSWINDOWS}
-    else if StartsDelimiter(FileName) then
-      Result := ExtractFileDrive(Path) + FileName
-{$endif}
-    else
-      Result := FileName;
-  end
+  if (FileName = '') then
+    Exit('');
+
+  if StartsStr('../', FileName) or StartsStr('..\', FileName) then
+    Result := ExpandFileName(IncludePathDelimiter(Root) + IncludePathDelimiter(Path) + FileName)
+  else if StartsStr('./', FileName) or StartsStr('.\', FileName) then
+    Result := IncludePathDelimiter(Root) + IncludePathDelimiter(Path) + RightStr(FileName, Length(FileName) - 2)
+  else if StartsStr('\\', FileName) then //windows network
+    Result := FileName
+  else if StartsDelimiter(FileName) then
+    {$ifdef MSWINDOWS}
+    Result := ExtractFileDrive(Path) + FileName
+    {$else}
+    Result := FileName
+    {$endif}
+  {$ifdef MSWINDOWS}
+  else if (Length(FileName)>1) and (FileName[2] = ':') then
+    Result := FileName
+  {$endif}
   else
-    Result := '';
+    Result := ExpandFileName(IncludePathDelimiter(Root) + IncludePathDelimiter(Path) + FileName);
 end;
 
 function CompareLeftStr(const Str: string; const WithStr: string; Start: Integer): Boolean;
@@ -1610,7 +1680,7 @@ begin
     Result := SubStr(Str, vSeperator, vIndex, vIndex);
 end;
 
-procedure SpliteStr(const S, Separator: string; out Name, Value: string);
+procedure SpliteStr(S, Separator: string; var Name:string; var Value: string);
 var
   p: integer;
 begin
@@ -1653,27 +1723,37 @@ begin
   end;
 end;
 
-function StrInArray(const Str: String; const InArray: array of String; CaseInsensitive: Boolean): Boolean;
+function StrInArray(const Str: String; const InArray: array of String; CaseInsensitive: Boolean): Integer;
 var
  itm : String;
+ i: Integer;
 begin
+  i := 0;
   for itm in InArray do
   begin
     if CaseInsensitive then
     begin
       if SameText(Str, itm) then
-        exit(True);
+        exit(i);
     end
     else if Str = itm then
-       exit(true);
+       exit(i);
+    Inc(i);
   end;
-  Result := False;
+  Result := -1;
 end;
 
-function StrInArray(const Str: string; const StartIndex: Integer; const InArray: array of string; out SepLength: Integer; CaseInsensitive: Boolean): Boolean;
+function IsStrInArray(const Str: String; const InArray: array of String; CaseInsensitive: Boolean): Boolean;
+begin
+  Result := (StrInArray(Str, InArray, CaseInsensitive) >= 0);
+end;
+
+function StrInArray(const Str: string; const StartIndex: Integer; const InArray: array of string; out SepLength: Integer; CaseInsensitive: Boolean): Integer;
 var
  itm : String;
+ i: Integer;
 begin
+  i := 0;
   for itm in InArray do
   begin
     if CaseInsensitive then
@@ -1681,17 +1761,23 @@ begin
       if SameText(MidStr(Str, StartIndex, Length(Itm)), itm) then
       begin
         SepLength := Length(Itm);
-        exit(true);
+        exit(i);
       end;
     end
     else if MidStr(Str, StartIndex, Length(Itm)) = itm then
     begin
       SepLength := Length(Itm);
-      exit(true);
+      exit(i);
     end;
+    Inc(i)
   end;
   SepLength := 0;
-  Result := false;
+  Result := -1;
+end;
+
+function IsStrInArray(const Str: string; const StartIndex: Integer; const InArray: array of string; out SepLength: Integer; CaseInsensitive: Boolean): Boolean;
+begin
+  Result := (StrInArray(Str, StartIndex, InArray, SepLength, CaseInsensitive) >= 0);
 end;
 
 function CharArrayToSet(const ArrayOfChar : TArray<Char>) : TSysCharSet;
@@ -1761,9 +1847,9 @@ begin
   end;
 end;
 
-function IncludePathDelimiter(const S: string): string;
+function IncludePathDelimiter(const S: string; Force: Boolean = False): string;
 begin
-  if (s <> '') and not EndsStr(PathDelim, s) then
+  if (Force or (s <> '')) and not EndsStr(PathDelim, s) then
     Result := s + PathDelim
   else
     Result := s;
@@ -1771,7 +1857,7 @@ end;
 
 function IncludeURLDelimiter(const S: string): string;
 begin
-  if (s <> '') and not EndsStr('/', S) then
+  if not EndsStr('/', S) then
     Result := S + '/'
   else
     Result := S;
@@ -1783,6 +1869,32 @@ begin
     Result := ''
   else
     Result := ExcludeTrailingPathDelimiter(Path);
+end;
+
+function AddStartURLDelimiter(const Path: string; Force: Boolean): string;
+begin
+  if Force or (Path <> '') then
+  begin
+    if (Path = '') or not StartsStr(URLPathDelim, Path) then
+      Result := URLPathDelim + Path
+    else
+      Result := Path
+  end
+  else
+    Result := Path
+end;
+
+function AddEndURLDelimiter(const Path: string; Force: Boolean): string;
+begin
+  if Force or (Path <> '') then
+  begin
+    if (Path = '') or not EndsStr(URLPathDelim, Path) then
+      Result := Path + URLPathDelim
+    else
+      Result := Path
+  end
+  else
+    Result := Path
 end;
 
 procedure CenterRect(var R1: TRect; R2: TRect);
@@ -1903,6 +2015,262 @@ begin
   Result := DayNames[DayOfWeek(vDateTime)] +', ' + IntToStr(aDay) +' ' + MonthNames[aMonth] + ' ' + FormatDateTime('yyyy hh":"nn":"ss', vDateTime) +' ' + '+000';
 end;
 
+
+function RFC2822ToDateTime(data: string): TDateTime;
+  const
+    DayShortNames: array[0..6] of string = ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun');
+
+    MonthShortNames: array[0..11] of string = ('jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul',
+                 'aug', 'sep', 'oct', 'nov', 'dec');
+
+  type
+    TTimezoneEntry = record
+      Name: string;
+      Offset: Integer;
+    end;
+
+  const
+    TimeZones: array[0..13] of TTimezoneEntry = (
+      (Name: 'UT'; Offset: 0),
+      (Name: 'UTC'; Offset: 0),
+      (Name: 'GMT'; Offset: 0),
+      (Name: 'Z'; Offset: 0),
+      (Name: 'AST'; Offset: -400),
+      (Name: 'ADT'; Offset: -300),
+      (Name: 'EST'; Offset: -500),
+      (Name: 'EDT'; Offset: -400),
+      (Name: 'CST'; Offset: -600),
+      (Name: 'CDT'; Offset: -500),
+      (Name: 'MST'; Offset: -700),
+      (Name: 'MDT'; Offset: -600),
+      (Name: 'PST'; Offset: -800),
+      (Name: 'PDT'; Offset: -700)
+    );
+
+  function IndexOfTimeZone(const tzName: string): Integer;
+  var
+    i: Integer;
+  begin
+    for i := Low(TimeZones) to High(TimeZones) do
+      if SameText(tzName, TimeZones[i].Name) then
+        Exit(i);
+    Result := -1;
+  end;
+
+  function Split(const s: string; sep: char): TStringList;
+  begin
+    Result := TStringList.Create;
+    Result.Delimiter := sep;
+    Result.StrictDelimiter := True;
+    Result.DelimitedText := s;
+  end;
+
+var
+  parts: TStringList;
+  i: Integer;
+  dd, mm, yy, thh, tmm, tss: Integer;
+  timeStr, ddStr, mmStr, yyStr, tmpStr,
+  tm, tz: string;
+  tzOffset: Integer;
+  tzFound: Boolean;
+  monthIndex: Integer;
+  dateParts: TStringList;
+  sign: Integer;
+begin
+  Result := 0;
+  data := Trim(data);
+  if data = '' then
+    Exit;
+
+  parts := Split(data, ' ');
+  try
+    if parts.Count = 0 then
+      Exit;
+
+    if (parts[0].EndsWith(',')) or (StrInArray(Copy(parts[0], 1, 3).ToLower, DayShortNames) >= 0) then
+      parts.Delete(0) // There's a dayname here. Skip it
+    else
+    begin
+      i := parts[0].LastIndexOf(',');
+      if i >= 0 then
+        parts[0] := Copy(parts[0], i + 2, MaxInt);
+    end;
+
+    if parts.Count < 3 then
+      exit
+    else if parts.Count = 3 then // RFC 850 date, deprecated
+    begin
+      dateParts := Split(parts[0], '-');
+      try
+        if dateParts.Count = 3 then
+        begin
+          parts.Insert(1, dateParts[1]);
+          parts.Insert(1, dateParts[2]);
+          parts[0] := dateParts[0];
+        end;
+      finally
+        FreeAndNil(dateParts);
+      end;
+      exit;
+    end
+    else if parts.Count = 4 then
+    begin
+      timeStr := parts[3];
+      i := Pos('+', timeStr);
+      if i = 0 then
+        i := Pos('-', timeStr);
+      if i > 0 then
+      begin
+        parts[3] := Copy(timeStr, 1, i - 1);
+        parts.Add(Copy(timeStr, i, MaxInt));
+      end
+      else
+        parts.Add(''); // dummy tz
+      exit;
+    end;
+
+    ddStr := parts[0];
+    mmStr := Copy(parts[1], 1, 3).ToLower;
+    yyStr := parts[2];
+
+    tm := parts[3];
+    tz := parts[4];
+
+    if (ddStr = '') or (mmStr = '') or (yyStr = '') then
+      Exit;
+
+//    if not TryStrToInt(mmStr, monthIndex) then
+    monthIndex := StrInArray(mmStr, MonthShortNames);
+    if monthIndex < 0 then
+    begin
+      // Swap dd/mm
+      tmpStr := ddStr;
+      ddStr := mmStr;
+      mmStr := tmpStr.ToLower;
+      monthIndex := StrInArray(mmStr, MonthShortNames);
+      if monthIndex < 0 then
+        Exit;
+    end;
+
+    mm := monthIndex + 1;
+
+    if ddStr.EndsWith(',') then
+      Delete(ddStr, Length(ddStr), 1);
+
+    if not TryStrToInt(ddStr, dd) then
+      Exit;
+
+    if Pos(':', yyStr) > 0 then
+    begin
+      // swap yy/tm
+      tmpStr := tm;
+      tm := yyStr;
+      yyStr := tmpStr;
+    end;
+
+    if yyStr.EndsWith(',') then
+    begin
+      Delete(yyStr, Length(yyStr), 1);
+      if yyStr = '' then
+        Exit;
+    end;
+
+    //if not yyStr.StartsWith('-') and not yyStr.StartsWith('+') and not yyStr[1].IsDigit then
+    if not yyStr.StartsWith('-') and not yyStr.StartsWith('+') and not IsDigit(yyStr[1]) then
+    begin
+      tmpStr := tz;
+      tz := yyStr;
+      yyStr := tmpStr;
+    end;
+
+    if not TryStrToInt(yyStr, yy) then
+      Exit;
+
+    if yy < 100 then
+    begin
+      if yy > 68 then
+        yy := yy + 1900
+      else
+        yy := yy + 2000;
+    end;
+  finally
+    parts.Free;
+  end;
+
+  try
+    if tm.EndsWith(',') then
+      Delete(tm, Length(tm), 1);
+
+    parts := Split(tm, ':');
+    if parts.Count = 2 then
+    begin
+      thh := StrToIntDef(parts[0], -1);
+      tmm := StrToIntDef(parts[1], -1);
+      tss := 0;
+    end
+    else if parts.Count = 3 then
+    begin
+      thh := StrToIntDef(parts[0], -1);
+      tmm := StrToIntDef(parts[1], -1);
+      tss := StrToIntDef(parts[2], -1);
+    end
+    else
+      Exit;
+  finally
+    parts.Free;
+  end;
+
+  if (thh < 0) or (tmm < 0) or (tss < 0) then
+    Exit;
+
+  tzFound := False;
+  tzOffset := 0;
+  if tz <> '' then
+  begin
+    i := IndexOfTimeZone(tz.ToUpper);
+    if i >= 0 then
+    begin
+      tzOffset := TimeZones[i].Offset;
+      tzFound := True;
+    end
+    else if TryStrToInt(tz, tzOffset) then
+    begin
+      if (tzOffset = 0) and tz.StartsWith('-') then
+        tzOffset := 0
+      else
+        tzFound := True;
+    end;
+  end;
+
+  if tzFound then
+  begin
+    sign := 1;
+    if tzOffset < 0 then
+    begin
+      sign := -1;
+      tzOffset := -tzOffset;
+    end;
+    tzOffset := sign * ((tzOffset div 100) * 3600 + (tzOffset mod 100) * 60);
+  end
+  else
+    tzOffset := 0;
+
+  Result := EncodeDate(yy, mm, dd) + EncodeTime(thh, tmm, tss, 0); //tzOffset
+  Result := IncHour(Result, tzOffset);
+end;
+
+function DateTimeToRFC2822(vDate: TDateTime): string;
+var
+  aDate: TDateTime;
+begin
+  {$ifdef FPC}
+  aDate := NowUTC;
+  {$else}
+  aDate := TTimeZone.Local.ToUniversalTime(vDate);
+  {$endif}
+  Result := FormatDateTime('ddd, dd mmm yyyy hh:nn:ss', aDate, DefFormatSettings) + ' GMT';
+end;
+
 //* thanks to https://stackoverflow.com/a/41726706/585304
 
 { TEncodingHelper }
@@ -1999,7 +2367,7 @@ begin
   {$endif}
 end;
 
-function Hex2String(const vData: string): string; overload;
+function HexToString(const vData: string): string; overload;
 var
   b, r: TBytes;
 begin
@@ -2015,15 +2383,15 @@ begin
     Result := '';
 end;
 
-function String2Hex(const vData: string): string; overload;
+function StringToHex(const vData: string): string; overload;
 begin
   if vData<>'' then
-    Result := String2Hex(PByte(vData), ByteLength(vData))
+    Result := StringToHex(PByte(vData), ByteLength(vData))
   else
     Result := '';
 end;
 
-function String2Hex(const vData: PByte; vCount: Integer): string;
+function StringToHex(const vData: PByte; vCount: Integer): string;
 begin
   SetLength(Result, 2*vCount);
   BinToHex(vData, PByte(Result), vCount);
@@ -2306,6 +2674,7 @@ begin
 end;
 
 initialization
+  DefFormatSettings := TFormatSettings.Invariant;
   {$ifdef windows}
   SystemAnsiCodePage := GetACP; //windows only
   {$else}

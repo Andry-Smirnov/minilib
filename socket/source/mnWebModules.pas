@@ -12,18 +12,19 @@
 {$H+}
 {$IFDEF FPC}
 {$MODE delphi}
+{$WARN 5024 off : Parameter "$1" not used}
 {$ENDIF}
 
 {
-            Userinfo       Host      Port
-            ┌──┴───┐ ┌──────┴────────┌┴┐
+            Userinfo       Host      Port                       URI (always started / )
+            ┌──┴───┐ ┌──────┴────────┌┴┐┌────────────────────────┴───────────────────────────────┐
 GET https://john.doe@www.example.com:123/username/forum/questions/?tag=networking&order=newest#top
                      └──────┬──────┘    └───────────────┬────────┘└───────────┬─────────────┘ └┬─┘
-                       DomainName                      Path(Full)           Query             Fragment
+                       DomainName                    Address                Query           Fragment
                                         └───┬───┘└──┬──┘└──┬─────┘            ┬
                                         Directory Alias   Path              Params
     └────────────────────────┬─────────┘       Module Name
-                          HomeURL
+                           HomeURL
 }
 
 {**
@@ -51,7 +52,6 @@ Notes:
 {**
   Ref: https://www.ntu.edu.sg/home/ehchua/programming/webprogramming/HTTP_Basics.html
 *}
-
 interface
 
 uses
@@ -63,95 +63,17 @@ uses
   {$endif}
   DateUtils, mnLogs, mnBase64,
   mnUtils, mnSockets, mnServers, mnStreams, mnStreamUtils,
-  mnFields, mnParams, mnMultipartData, mnModules;
+  mnFields, mnParams, mnClasses, mnMultipartData, mnModules;
 
 type
 
   TmodWebModule = class;
 
-  TmodHttpRequest = class(TwebRequest)
-  protected
-    procedure Created; override;
-  public
-    procedure DoPrepareHeader; override;
-  end;
-
-  THttpResult = (
-    hrNone,
-    hrOK,
-    hrNoContent,
-    hrUnauthorized,
-    hrError,
-    hrRedirect, //302
-    hrNotModified,
-    hrMovedTemporarily, //307
-    hrNotFound,
-    hrSwitchingProtocols,
-    hrServiceUnavailable
-  );
-
-  THttpResultHelper = record helper for THttpResult
-    function ToString: string;
-  end;
-
-  { TmodHttpRespond }
-
-  TmodHttpRespond = class(TwebRespond)
-  private
-    FHomePath: string; //Document root folder
-    FHostURL: string;
-    FHttpResult: THttpResult;
-    procedure SetHttpResult(const Value: THttpResult);
-  protected
-    procedure Created; override;
-  public
-    property HttpResult: THttpResult read FHttpResult write SetHttpResult;
-    //Document root folder
-    property HomePath: string read FHomePath;
-    property HostURL: string read FHostURL;
-  end;
-
-  { TmodHttpCommand }
-
   TSendFileDisposition = (sdDefault, sdInline, sdAttachment);
-
-  TmodHttpCommand = class abstract(TmodCommand)
-  private
-    function GetRespond: TmodHttpRespond;
-  protected
-    procedure Prepare(var Result: TmodRespondResult); override;
-    procedure RespondResult(var Result: TmodRespondResult); override;
-    procedure Unprepare(var Result: TmodRespondResult); override;
-
-    function CreateRespond: TmodRespond; override;
-
-    procedure RespondNotFound; virtual;
-    procedure RespondNotActive; virtual;
-
-    procedure SendFile(const vFile, vName: string; vDisposition: TSendFileDisposition = sdDefault); overload;
-    procedure SendFile(const vFile: string); overload;
-
-  public
-    destructor Destroy; override;
-    property Respond: TmodHttpRespond read GetRespond;
-  end;
 
   TmodWebFileModule = class;
 
-  { TmodURICommand }
-
-  TmodURICommand = class(TmodHttpCommand)
-  private
-    function GetModule: TmodWebFileModule;
-  protected
-    function GetDefaultDocument(vRoot: string): string;
-    procedure RespondResult(var Result: TmodRespondResult); override;
-    procedure Prepare(var Result: TmodRespondResult); override;
-    procedure Created; override;
-  public
-    destructor Destroy; override;
-    property Module: TmodWebFileModule read GetModule;
-  end;
+  { TwebFileCommand }
 
   TmodWebServer = class;
 
@@ -160,12 +82,15 @@ type
   TmodWebModule = class abstract(TmodModule)
   private
     FHomePath: string;
+    FOrigins: TStrings;
     FWorkPath: string;
 
     //FSmartURL: Boolean;
     procedure SetHomePath(AValue: string);
+    procedure SetOrigins(AValue: TStrings);
   protected
     procedure Created; override;
+    procedure Started; override;
 
     procedure Log(S: string); override;
     procedure InternalError(ARequest: TmodRequest; var Handled: Boolean); override;
@@ -181,12 +106,12 @@ type
     Domain: string; //localhost
     Port: string;
 
+    property Origins: TStrings read FOrigins write SetOrigins;
     //Public Path
     property HomePath: string read FHomePath write SetHomePath;
     //Private Path
     property WorkPath: string read FWorkPath write FWorkPath;
   end;
-
   { TmodWebFileModule }
 
   TmodWebFileModule = class(TmodWebModule)
@@ -195,21 +120,38 @@ type
     procedure SetDefaultDocument(AValue: TStringList);
     procedure DoRegisterCommands; override;
     procedure Created; override;
+    procedure Started; override;
   public
     destructor Destroy; override;
     property DefaultDocument: TStringList read FDefaultDocument write SetDefaultDocument;
   end;
 
-  ThttpModules = class(TmodModules)
+  TwebFileCommand = class(TwebCommand)
+  private
+    function GetModule: TmodWebFileModule;
   protected
-    function CreateRequest(Astream: TmnBufferStream): TmodRequest; override;
-    function CheckRequest(const ARequest: string): Boolean; override;
+    function GetDefaultDocument(vRoot: string): string;
+    procedure RespondResult(var Result: TmodRespondResult); override;
+    procedure Prepare(var Result: TmodRespondResult); override;
+    procedure Created; override;
+  public
+    destructor Destroy; override;
+    property Module: TmodWebFileModule read GetModule;
+  end;
+
+  { TmodForwardHttpsModule }
+
+  TmodForwardHttpsModule = class(TmodWebModule)
+  protected
+    procedure DoRegisterCommands; override;
+  public
   end;
 
   { TmodWebModules }
 
-  TmodWebModules = class(ThttpModules)
+  TmodWebModules = class(TmodModules)
   protected
+    function CreateRequest(Astream: TmnBufferStream): TmodRequest; override;
   public
     procedure ParseHead(ARequest: TmodRequest; const RequestLine: string); override;
   end;
@@ -220,24 +162,21 @@ type
   protected
     function CreateModules: TmodModules; override;
   public
-    procedure AddAcmeChallenge(const AName: string = '.well-known'; const AHomePath: string = '');
+    constructor Create; override;
+    procedure AddChallengeAcme(const AHomePath: string);
+    procedure AddFileModule(const Alias: string; const AHomePath: string);
+    procedure AddRedirectHttps;
   end;
+
+  //*****************************************
 
   TmodWebServer = class(TmodCustomWebServer)
   protected
     procedure Created; override;
   end;
 
-  { TmodAcmeChallengeServer }
-
-  TmodAcmeChallengeServer = class(TmodCustomWebServer)
-  protected
-    procedure Created; override;
-
-  end;
-
   {$ifndef FPC}
-  TmodWebEventProc = reference to procedure(vRequest: TmodRequest; vRespond: TmodHttpRespond; var vResult: TmodRespondResult);
+  TmodWebEventProc = reference to procedure(vRequest: TmodRequest; vRespond: TwebRespond; var vResult: TmodRespondResult);
 
   TmodWebEventModule = class(TmodWebModule)
   protected
@@ -256,40 +195,38 @@ type
 
   { TmodHttpEventCommand }
 
-  TmodHttpEventCommand = class(TmodURICommand)
+  TmodHttpEventCommand = class(TwebFileCommand)
   public
     procedure RespondResult(var Result: TmodRespondResult); override;
   end;
 
   {$endif}
 
-  { TmodHttpGetCommand }
+  { TmodHttpGetPostCommand }
 
-  TmodHttpGetCommand = class(TmodURICommand)
+  TwebGetPostCommand = class(TwebFileCommand)
+  public
+    procedure RespondResult(var Result: TmodRespondResult); override;
+  end;
+
+  //Handle cors :)
+
+  TwebOptionCommand = class(TwebGetPostCommand)
+  public
+    procedure RespondResult(var Result: TmodRespondResult); override;
+  end;
+
+  { TwebPutCommand }
+
+  TwebPutCommand = class(TwebFileCommand)
   protected
-    procedure RespondDocument(const vDocument: string; var Result: TmodRespondResult); virtual;
   public
     procedure RespondResult(var Result: TmodRespondResult); override;
   end;
 
-  { TmodHttpPostCommand }
+  { TmodForwardHttpsCommand }
 
-  TmodHttpPostCommand = class(TmodHttpGetCommand)
-  protected
-    Contents: TMemoryStream;
-  public
-    procedure RespondResult(var Result: TmodRespondResult); override;
-  end;
-
-  //handle cors :)
-  TmodHttpOptionCommand = class(TmodHttpGetCommand)
-  public
-    procedure RespondResult(var Result: TmodRespondResult); override;
-  end;
-
-  { TmodPutCommand }
-
-  TmodPutCommand = class(TmodURICommand)
+  TmodForwardHttpsCommand = class(TwebCommand)
   protected
   public
     procedure RespondResult(var Result: TmodRespondResult); override;
@@ -297,7 +234,7 @@ type
 
   { TmodServerInfoCommand }
 
-  TmodServerInfoCommand = class(TmodURICommand)
+  TmodServerInfoCommand = class(TwebFileCommand)
   protected
     procedure RespondResult(var Result: TmodRespondResult); override;
   public
@@ -305,7 +242,7 @@ type
 
   { TmodDirCommand }
 
-  TmodDirCommand = class(TmodURICommand)
+  TmodDirCommand = class(TwebFileCommand)
   protected
     procedure RespondResult(var Result: TmodRespondResult); override;
   public
@@ -313,10 +250,40 @@ type
 
   { TmodDeleteFileCommand }
 
-  TmodDeleteFileCommand = class(TmodURICommand)
+  TmodDeleteFileCommand = class(TwebFileCommand)
   protected
     procedure RespondResult(var Result: TmodRespondResult); override;
   public
+  end;
+
+  { TWebServerItem }
+
+  TWebServerItem = class(TmnNamedObject)
+  private
+    FOwnIt: Boolean;
+    FServer: TmodCustomWebServer;
+    function GetStarted: Boolean;
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    procedure Start;
+    procedure Stop;
+
+    property Server: TmodCustomWebServer read FServer;
+    property Started: Boolean read GetStarted;
+  end;
+
+  { TWebServers }
+
+  TWebServers = class(TmnNamedObjectList<TWebServerItem>)
+  private
+    FStarted: Boolean;
+  public
+    function AddServer(AName: string; AServer: TmodCustomWebServer; OwnIt: Boolean = True): Integer;
+    procedure Start;
+    procedure Stop;
+    property Started: Boolean read FStarted;
   end;
 
 var
@@ -324,12 +291,23 @@ var
 
 function WebExpandFile(HomePath, Path: string; out Document: string): Boolean;
 function WebExpandToRoot(FileName: string; Root: string): string;
-function HashWebSocketKey(const key: string): string;
+
+function WebServers: TWebServers;
 
 implementation
 
 uses
   mnMIME;
+
+var
+  FWebServers: TWebServers = nil;
+
+function WebServers: TWebServers;
+begin
+  if FWebServers = nil then
+    FWebServers := TWebServers.Create;
+  Result := FWebServers;
+end;
 
 function WebExpandFile(HomePath, Path: string; out Document: string): Boolean;
 begin
@@ -371,91 +349,6 @@ begin
     Result := '';
 end;
 
-//TODO slow function needs to improvements
-//https://stackoverflow.com/questions/1549213/whats-the-correct-encoding-of-http-get-request-strings
-
-{$ifdef FPC}
-function EncodeBase64(const Buffer; Count: Integer): Utf8String;
-var
-  Outstream : TStringStream;
-  Encoder   : TBase64EncodingStream;
-begin
-  if Count=0 then
-    Exit('');
-  Outstream:=TStringStream.Create('');
-  try
-    Encoder:=TBase64EncodingStream.create(outstream);
-    try
-      Encoder.Write(Buffer, Count);
-    finally
-      Encoder.Free;
-      end;
-    Result:=Outstream.DataString;
-  finally
-    Outstream.free;
-    end;
-end;
-{$endif}
-
-function HashWebSocketKey(const key: string): string;
-var
-{$ifdef FPC}
-  b: TSHA1Digest;
-{$else}
-  b: TBytes;
-{$endif}
-begin
-{$ifdef FPC}
-  b := SHA1String(Key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11');
-  Result := EncodeBase64(b, SizeOf(b));
-{$else}
-  b := THashSHA1.GetHashBytes(Utf8String(Key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'));
-  Result := TNetEncoding.Base64String.EncodeBytesToString(b);
-{$endif}
-end;
-
-{ TmodHttpRespond }
-
-procedure TmodHttpRespond.Created;
-begin
-  inherited;
-  FHttpResult := hrNone;
-end;
-
-procedure TmodHttpRespond.SetHttpResult(const Value: THttpResult);
-begin
-  if resHeaderSent in Header.States then
-    raise TmodModuleException.Create('Header is already sent');
-  FHttpResult := Value;
-  Head := HttpResult.ToString;
-end;
-
-{ TmodHttpPostCommand }
-
-procedure TmodHttpPostCommand.RespondResult(var Result: TmodRespondResult);
-begin
-  {if SameText(Request.Method, 'POST') then
-  begin
-    if (Request.Header.Field['Content-Type'].Have('application/json')) then
-    begin
-      Contents := TMemoryStream.Create;
-      if Request.Stream <> nil then
-        Request.Stream.ReadStream(Contents, Request.ContentLength);
-      Contents.Position := 0; //it is memory btw
-      //Contents.SaveToFile('d:\temp\json.json');
-    end
-    else
-    begin
-      Contents := TMemoryStream.Create;
-      if Request.Stream <> nil then
-        Request.Stream.ReadStream(Contents, Request.ContentLength);
-      Contents.Position := 0; //it is memory btw
-      Contents.SaveToFile('c:\temp\1.txt');
-    end;
-  end;}
-  inherited;
-end;
-
 { TmodWebModule }
 
 procedure TmodWebModule.SetHomePath(AValue: string);
@@ -465,6 +358,12 @@ begin
   FHomePath := AValue;
 end;
 
+procedure TmodWebModule.SetOrigins(AValue: TStrings);
+begin
+  if FOrigins=AValue then Exit;
+  FOrigins.Assign(AValue);
+end;
+
 procedure TmodWebModule.Created;
 begin
   inherited;
@@ -472,6 +371,12 @@ begin
   UseCompressing := ovNo;
   UseWebSocket := True;
   FHomePath := '';
+  FOrigins := TStringList.Create;
+end;
+
+procedure TmodWebModule.Started;
+begin
+  inherited;
 end;
 
 procedure TmodWebModule.DoPrepareRequest(ARequest: TmodRequest);
@@ -500,7 +405,8 @@ end;
 
 destructor TmodWebModule.Destroy;
 begin
-  inherited Destroy;
+  FreeAndNil(FOrigins);
+  inherited;
 end;
 
 procedure TmodWebModule.Log(S: string);
@@ -519,17 +425,9 @@ end;
 procedure TmodWebFileModule.DoRegisterCommands;
 begin
   inherited;
-  //use post and get as same command
-  RegisterCommand('GET', TmodHttpGetCommand, true);
-  //RegisterCommand('GET', TmodHttpPostCommand, true);
-  RegisterCommand('POST', TmodHttpPostCommand, true);
-  RegisterCommand('Info', TmodServerInfoCommand);
-  {
-  RegisterCommand('GET', TmodHttpGetCommand);
-  RegisterCommand('PUT', TmodPutCommand);
-  RegisterCommand('DIR', TmodDirCommand);
-  RegisterCommand('DEL', TmodDeleteFileCommand);
-  }
+  RegisterCommand('GET', TwebGetPostCommand, True);
+  RegisterCommand('POST', TwebGetPostCommand);
+  RegisterCommand('INFO', TmodServerInfoCommand);
 end;
 
 procedure TmodWebFileModule.Created;
@@ -542,20 +440,35 @@ begin
   FDefaultDocument.Add('default.htm');
 end;
 
+procedure TmodWebFileModule.Started;
+begin
+  inherited;
+  if HomePath = '' then
+    raise Exception.Create('Home path not set!');
+end;
+
 destructor TmodWebFileModule.Destroy;
 begin
   FreeAndNil(FDefaultDocument);
   inherited;
 end;
 
-{ TmodURICommand }
+{ TmodForwardHttpsModule }
 
-function TmodURICommand.GetModule: TmodWebFileModule;
+procedure TmodForwardHttpsModule.DoRegisterCommands;
+begin
+  inherited;
+  RegisterCommand('', TmodForwardHttpsCommand, True);
+end;
+
+{ TwebFileCommand }
+
+function TwebFileCommand.GetModule: TmodWebFileModule;
 begin
   Result := (inherited Module) as TmodWebFileModule;
 end;
 
-function TmodURICommand.GetDefaultDocument(vRoot: string): string;
+function TwebFileCommand.GetDefaultDocument(vRoot: string): string;
 var
   i: Integer;
   aFile: string;
@@ -578,24 +491,23 @@ begin
     Result := vRoot;
 end;
 
-procedure TmodURICommand.RespondResult(var Result: TmodRespondResult);
+procedure TwebFileCommand.RespondResult(var Result: TmodRespondResult);
 begin
   inherited;
 end;
 
-procedure TmodURICommand.Prepare(var Result: TmodRespondResult);
+procedure TwebFileCommand.Prepare(var Result: TmodRespondResult);
 begin
   inherited;
-  Respond.FHomePath := Module.HomePath;
-  Respond.FHostURL := Request.Header.ReadString('Host');
+  Respond.HomePath := Module.HomePath;
 end;
 
-procedure TmodURICommand.Created;
+procedure TwebFileCommand.Created;
 begin
   inherited Created;
 end;
 
-{ TmodHttpGetCommand }
+{ TwebGetPostCommand }
 
 {function CompressSize(vData: PByte; vLen: Integer): TFileSize;
 var
@@ -612,21 +524,10 @@ begin
     Result := 0;
 end;}
 
-
-procedure TmodHttpGetCommand.RespondDocument(const vDocument: string; var Result: TmodRespondResult);
-begin
-  if FileExists(vDocument) then
-  begin
-    SendFile(vDocument);
-  end
-  else
-    RespondNotFound;
-end;
-
-procedure TmodHttpGetCommand.RespondResult(var Result: TmodRespondResult);
+procedure TwebGetPostCommand.RespondResult(var Result: TmodRespondResult);
 var
   aDocument, aHomePath: string;
-  aPath, aFile: string;
+  {aPath, aFile: string;}
   aDefault: Boolean;
 begin
 
@@ -640,11 +541,6 @@ begin
   '/web/dashbord/index.html' file
 
 *)
-  if (Request.Path='')and(Request.URI='/favicon.ico') then
-  begin
-    RespondDocument('favicon.ico', Result);
-    Exit;
-  end;
 
   aHomePath := ExcludePathDelimiter(Respond.HomePath);
 
@@ -671,7 +567,7 @@ begin
 
   if not StartsStr(aHomePath, aDocument) then //check if out of root :)
   begin
-    Respond.HttpResult := hrError;
+    Respond.Answer := hrError;
   end
   else if ((Request.Path = '') and not FileExists(aDocument)) or (not EndsDelimiter(aDocument) and DirectoryExists(aDocument)) then
   begin
@@ -681,11 +577,11 @@ begin
     //http://127.0.0.1:81/test/web
 
     //https://developer.mozilla.org/en-US/docs/Web/HTTP/Redirections
-    Request.Address := IncludeURLDelimiter(Request.Address);
+    //Request.Address := IncludeURLDelimiter(Request.Address);
     //Respond.SendHead('HTTP/1.1 301 Moved Permanently');
-    Respond.HttpResult := hrRedirect;
+    Respond.Answer := hrRedirect;
     //Respond.SendHead('HTTP/1.1 307 Temporary Redirect');
-    Respond.AddHeader('Location', IncludeURLDelimiter(Request.Address));
+    Respond.Location := IncludeURLDelimiter(Request.Address);
     Respond.SendHeader;
   end
   else
@@ -716,7 +612,7 @@ begin
       until (aPath='') or SameText(aPath, aHomePath);
     end;}
 
-    RespondDocument(aDocument, Result);
+    Respond.SendFile(aDocument);
   end;
   inherited;
 end;
@@ -726,15 +622,15 @@ end;
 procedure TmodServerInfoCommand.RespondResult(var Result: TmodRespondResult);
 begin
   inherited;
-  Respond.HttpResult := hrOK;
+  Respond.Answer := hrOK;
   Respond.SendHeader;
   //Respond.Stream.WriteLine('Server is running on port: ' + Module.Server.Port);
   Respond.Stream.WriteLine(Utf8String('the server is: "' + ParamStr(0) + '"'));
 end;
 
-{ TmodPutCommand }
+{ TwebPutCommand }
 
-procedure TmodPutCommand.RespondResult(var Result: TmodRespondResult);
+procedure TwebPutCommand.RespondResult(var Result: TmodRespondResult);
 var
   aFile: TFileStream;
   aFileName: string;
@@ -748,6 +644,16 @@ begin
   finally
     aFile.Free;
   end;
+end;
+
+{ TmodForwardHttpsCommand }
+
+procedure TmodForwardHttpsCommand.RespondResult(var Result: TmodRespondResult);
+begin
+  inherited;
+  Respond.Answer := hrRedirect;
+  Respond.Location := 'https://'+Respond.Request.Host + Respond.Request.URI;
+  Respond.SendHeader;
 end;
 
 { TmodDirCommand }
@@ -790,9 +696,82 @@ begin
   Respond.Stream.WriteCommand('OK');
 end;
 
-{ TmodURICommand }
+{ TWebServerItem }
 
-destructor TmodURICommand.Destroy;
+function TWebServerItem.GetStarted: Boolean;
+begin
+  Result := (Server <> nil) and (Server.Started);
+end;
+
+constructor TWebServerItem.Create;
+begin
+  inherited;
+end;
+
+destructor TWebServerItem.Destroy;
+begin
+  if FOwnIt then
+    FreeAndNil(FServer);
+  inherited;
+end;
+
+procedure TWebServerItem.Start;
+begin
+  if Server <> nil then
+  begin
+    Server.Start;
+  end;
+end;
+
+procedure TWebServerItem.Stop;
+begin
+  if Server <> nil then
+  begin
+    Server.Start;
+  end;
+end;
+
+{ TWebServers }
+
+function TWebServers.AddServer(AName: string; AServer: TmodCustomWebServer;
+  OwnIt: Boolean): Integer;
+var
+  item: TWebServerItem;
+begin
+  item := TWebServerItem.Create;;
+  item.Name := AName;
+  item.FServer := AServer;
+  item.FOwnIt := OwnIt;
+  Result := Add(item);
+end;
+
+procedure TWebServers.Start;
+var
+  item: TWebServerItem;
+begin
+  for item in Self do
+  begin
+    if (item.Server <> nil) and item.Server.Enabled then
+      item.Start;
+  end;
+  FStarted := True;
+end;
+
+procedure TWebServers.Stop;
+var
+  item: TWebServerItem;
+begin
+  for item in Self do
+  begin
+    if (item.Server <> nil) and item.Server.Started then
+      item.Stop;
+  end;
+  FStarted := False;
+end;
+
+{ TwebFileCommand }
+
+destructor TwebFileCommand.Destroy;
 begin
   inherited;
 end;
@@ -802,262 +781,63 @@ end;
 procedure TmodWebServer.Created;
 begin
   inherited;
-  TmodWebFileModule.Create('web', 'doc', ['http/1.1'], Modules);
-  Port := '80';
-
+  //TmodWebFileModule.Create('web', 'doc', ['http/1.1'], Modules);
 end;
 
 { TmodAcmeChallengeServer }
-
-procedure TmodAcmeChallengeServer.Created;
-begin
-  inherited;
-  AddAcmeChallenge;
-end;
 
 function TmodCustomWebServer.CreateModules: TmodModules;
 begin
   Result := TmodWebModules.Create(Self);
 end;
 
-procedure TmodCustomWebServer.AddAcmeChallenge(const AName: string; const AHomePath: string);
+constructor TmodCustomWebServer.Create;
 begin
-  //* http://localhost/.well-known/acme-challenge/index.html
-  with TmodWebFileModule.Create(AName, '.well-known', ['http/1.1'], Modules) do
-  begin
-    Level := -1;
-    HomePath := AHomePath;
-  end;
-  //* use certbot folder to "Application.Location + 'cert'" because certbot will create folder .well-known
+  inherited;
   Port := '80';
 end;
 
-{ TmodHttpCommand }
+const
+  sAcmeNameFolder = 'well-known';
 
-function TmodHttpCommand.GetRespond: TmodHttpRespond;
+procedure TmodCustomWebServer.AddChallengeAcme(const AHomePath: string);
 begin
-  Result := inherited Respond as TmodHttpRespond;
-end;
-
-destructor TmodHttpCommand.Destroy;
-begin
-  inherited;
-end;
-
-procedure TmodHttpCommand.Prepare(var Result: TmodRespondResult);
-var
-  aKeepAlive: Boolean;
-  WSHash, WSKey: string;
-  SendHostHeader: Boolean;
-begin
-  inherited;
-
-  if Request.Header.Field['Connection'].Have('Upgrade', [',']) then
+  if Modules.Find(sAcmeNameFolder) = nil then
   begin
-    if Request.Use.WebSocket and Request.Header.Field['Upgrade'].Have('WebSocket', [',']) then
+    //* http://localhost/.well-known/acme-challenge/index.html
+    with TmodWebFileModule.Create(sAcmeNameFolder, '.' + sAcmeNameFolder, [], Modules) do
     begin
-      if Request.Header['Sec-WebSocket-Version'].ToInteger = 13 then
-      begin
-        WSHash := Request.Header['Sec-WebSocket-Key'];
-        SendHostHeader := Request.Header.ReadBool('X-Send-Server-Hostname', True);
-
-        WSKey := HashWebSocketKey(WSHash);
-        Respond.HttpResult := hrSwitchingProtocols;
-        //Respond.AddHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-        Respond.AddHeader('Connection', 'Upgrade');
-        Respond.AddHeader('upgrade', 'websocket');
-        Respond.AddHeader('date: ', FormatHTTPDate(Now));
-        Respond.AddHeader('Sec-Websocket-Accept', WSKey);
-        if Request.Header['Sec-WebSocket-Protocol'] = 'plain' then
-          Respond.AddHeader('Sec-WebSocket-Protocol', 'plain');
-        Respond.SendHeader;
-
-        Respond.KeepAlive := True;
-        Request.ProtcolClass := TmnWebSocket13StreamProxy;
-        Request.ProtcolProxy := Request.ProtcolClass.Create;
-        Request.ConnectionType := ctWebSocket;
-        Result.Status := Result.Status + [mrKeepAlive];
-        Request.Stream.AddProxy(Request.ProtcolProxy);
-
-        if SendHostHeader then
-          Respond.Stream.WriteUTF8String('Request served by miniWebModule');
-        //* https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers
-      end;
+      Level := -1;
+      HomePath := AHomePath;
     end;
-  end;
-
-  if Request.KeepAlive then
-  begin
-    Respond.KeepAlive := True;
-    Respond.AddHeader('Connection', 'Keep-Alive');
-    Respond.AddHeader('Keep-Alive', 'timout=' + IntToStr(Request.Use.KeepAliveTimeOut div 1000) + ', max=100');
-  end;
-
-  if Request.ConnectionType = ctWebSocket then
-  begin
-    Request.CompressProxy.Disable;
-  end
-  else
-  begin
-    if Request.Header.Field['Content-type'].Have('multipart/form-data', [';']) then
-    begin
-      Request.ConnectionType := ctFormData;
-    end;
-    {if not Respond.KeepAlive and (Request.Use.Compressing in [ovUndefined, ovYes]) then
-    begin
-      if Request.CompressProxy <> nil then
-        Respond.AddHeader('Content-Encoding', Request.CompressProxy.GetCompressName);
-    end;}
-
-    //Compressing
-    {if not Respond.KeepAlive and (UseCompressing in [ovUndefined, ovYes]) then
-    begin
-      if Request.Header.Field['Accept-Encoding'].Have('gzip', [',']) then
-        CompressClass := TmnGzipStreamProxy
-      else if Request.Header.Field['Accept-Encoding'].Have('deflate', [',']) then
-        CompressClass := TmnDeflateStreamProxy
-      else
-        CompressClass := nil;
-      if CompressClass <> nil then
-        Respond.AddHeader('Content-Encoding', CompressClass.GetCompressName);
-    end;}
+    //* use certbot folder to "Application.Location + 'acme'" because certbot will create folder .well-known
   end;
 end;
 
-procedure TmodHttpCommand.Unprepare(var Result: TmodRespondResult);
-var
-  aParams: TmnParams;
+const
+  sForwardHttps = 'ForwardHttps';
+
+procedure TmodCustomWebServer.AddFileModule(const Alias: string; const AHomePath: string);
 begin
-  inherited;
-  if Request.ConnectionType = ctWebSocket then
+  if Modules.Find(Alias) = nil then
   begin
-  end
-  else
-  begin
-    if not Respond.Header.Exists['Content-Length'] then
-      Respond.KeepAlive := False;
-
-    if Respond.KeepAlive then
+    with TmodWebFileModule.Create(Alias, Alias, [], Modules) do
     begin
-      if Request.Header.IsExists('Keep-Alive') then //idk if really sent from client
-      begin
-        aParams := TmnParams.Create;
-        try
-          //Keep-Alive: timeout=5, max=1000
-          aParams.Separator := '=';
-          aParams.Delimiter := ',';
-          aParams.AsString := Request.Header['Keep-Alive'];
-          Result.Timout := aParams['timeout'].AsInteger;
-        finally
-          aParams.Free;
-        end;
-      end
-      else
-        Result.Timout := Request.Use.KeepAliveTimeOut;
-
-      Result.Status := Result.Status + [mrKeepAlive];
+      Level := -1;
+      HomePath := AHomePath;
     end;
-
-    Request.CompressProxy.Disable;
   end;
 end;
 
-procedure TmodHttpCommand.RespondResult(var Result: TmodRespondResult);
+procedure TmodCustomWebServer.AddRedirectHttps;
 begin
-  inherited;
-end;
-
-procedure TmodHttpCommand.SendFile(const vFile, vName: string; vDisposition: TSendFileDisposition);
-var
-  aDocSize: Int64;
-  aDocStream: TFileStream;
-  aDate: TDateTime;
-  aEtag, aFtag: string;
-begin
-  if Respond.Stream.Connected then
+  if Modules.Find(sForwardHttps) = nil then
   begin
-    FileAge(vFile, aDate);
-    aFtag := DateTimeToUnix(aDate).ToString;
-    aEtag := Request.Header['If-None-Match'];
-    if (aEtag<>'') and (aEtag = aFtag) then
+    with TmodForwardHttpsModule.Create(sForwardHttps, '', ['http/1.1'], Modules) do
     begin
-      Respond.HttpResult := hrNotModified;
-      Respond.SendHeader;
-      //Log(vFile+': not modified');
-      Exit;
+        //Level := 0;
     end;
-
-    aDocStream := TFileStream.Create(vFile, fmOpenRead or fmShareDenyWrite);
-    try
-      {if Respond.KeepAlive then
-        aDocSize := CompressSize(PByte(aDocStream.Memory), aDocStream.Size)
-      else}
-        aDocSize := aDocStream.Size;
-
-      Respond.HttpResult := hrOK;
-
-      //Respond.AddHeader('Cache-Control', 'max-age=600');
-      Respond.AddHeader('Cache-Control', 'max-age=600');
-      //Respond.AddHeader('Cache-Control', 'public');
-      //Respond.AddHeader('Date', Now);
-      Respond.AddHeader('Last-Modified', FormatHTTPDate(aDate));
-      Respond.AddHeader('ETag', aFtag);
-      if Respond.Stream.Connected then
-      begin
-        Respond.PutHeader('Content-Type', DocumentToContentType(vName));
-        case vDisposition of
-          sdInline: Respond.PutHeader('Content-Disposition', Format('inline; filename="%s"', [vName]));
-          sdAttachment: Respond.PutHeader('Content-Disposition', Format('attachment; filename="%s"', [vName]));
-          else;
-        end;
-
-        if Respond.KeepAlive then
-          Respond.AddHeader('Content-Length', IntToStr(aDocSize));
-      end;
-
-      Respond.SendHeader;
-
-      if Respond.Stream.Connected then
-        Respond.Stream.WriteStream(aDocStream);
-    finally
-      aDocStream.Free;
-    end;
-  end
-  else
-  begin
-    RespondNotActive;
   end;
-end;
-
-procedure TmodHttpCommand.RespondNotActive;
-var
-  Body: string;
-begin
-  Respond.HttpResult := hrOK; //hrError
-  Respond.AddHeader('Content-Type', 'text/plain');
-  Respond.Stream.WriteUTF8String('404 Not Active');
-  Respond.KeepAlive := False;
-end;
-
-procedure TmodHttpCommand.RespondNotFound;
-var
-  Body: string;
-begin
-  Respond.HttpResult := hrNotFound; //hrError
-  Respond.AddHeader('Content-Type', 'text/plain');
-  Respond.Stream.WriteUTF8String('404 Not Found');
-  Respond.KeepAlive := False;
-end;
-
-
-procedure TmodHttpCommand.SendFile(const vFile: string);
-begin
-  SendFile(vFile, ExtractFileName(vFile));
-end;
-
-function TmodHttpCommand.CreateRespond: TmodRespond;
-begin
-  Result := TmodHttpRespond.Create(Request);
 end;
 
 { TmodCustomWebModules }
@@ -1067,26 +847,6 @@ begin
   inherited;
   //ARequest.ParsePath(ARequest.URI); duplicate in parse head :)
   ARequest.Command := ARequest.Method;
-end;
-
-{ THttpResultHelper }
-
-function THttpResultHelper.ToString: string;
-begin
-  Result := 'HTTP/1.1 ';
-  case Self of
-    hrNone: Result := '';
-    hrOK: Result := Result + '200 OK';
-    hrNoContent: Result := Result + '204 No Content';
-    hrError: Result := Result + '500 Internal Server Error';
-    hrUnauthorized: Result := Result + '401 Unauthorized';
-    hrNotFound: Result := Result + '404 NotFound';
-    hrMovedTemporarily: Result := Result + '307 Temporary Redirect';
-    hrRedirect: Result := Result + '302 Found';
-    hrNotModified: Result := Result + '304 Not Modified';
-    hrSwitchingProtocols: Result := Result + '101 Switching Protocols';
-    hrServiceUnavailable: Result := Result + '503 Service Unavailable';
-  end;
 end;
 
 {$ifndef FPC}
@@ -1122,55 +882,32 @@ begin
 end;
 {$endif FPC}
 
-{ TmodHttpOptionCommand }
+{ TwebOptionCommand }
 
-procedure TmodHttpOptionCommand.RespondResult(var Result: TmodRespondResult);
+procedure TwebOptionCommand.RespondResult(var Result: TmodRespondResult);
 begin
   inherited;
-  Respond.HttpResult := hrOK;
-  Respond.PutHeader('Allow', 'OPTIONS, GET, HEAD, POST');
-  //PutHeader('Access-Control-Allow-Origin', 'origin');
+
+  Respond.Answer := hrOK;
+  Respond.PutHeader('server', sMiniLibServer);
+  Respond.PutHeader('Allow', 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS');
 //  PutHeader('Access-Control-Allow-Headers', 'Origin, Accept, Accept-  Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, X-Response-Time, X-PINGOTHER, X-CSRF-Token,Authorization');
 //  PutHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  Respond.PutHeader('server', 'cserp.web.service/v1');
-  Respond.PutHeader('Access-Control-Allow-Origin', '*');
-  Respond.PutHeader('Access-Control-Allow-Method', 'POST');
-  Respond.PutHeader('Access-Control-Allow-Headers', 'X-PINGOTHER, Content-Type');
-
+  Respond.PutHeader('Access-Control-Allow-Method', 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS');
+  Respond.PutHeader('Access-Control-Allow-Headers', 'X-PINGOTHER, Content-Type, Authorization, Accept, Origin');
+  if (Module.Origins.Count = 0) then
+    Respond.PutHeader('Access-Control-Allow-Origin', '*')
+  else
+    Respond.PutHeader('Access-Control-Allow-Origin', Module.Origins.CommaText);
 end;
 
-{ ThttpModules }
-
-function ThttpModules.CheckRequest(const ARequest: string): Boolean;
+function TmodWebModules.CreateRequest(Astream: TmnBufferStream): TmodRequest;
 begin
-  Result := Server.UseSSL or (ARequest[1]<>#$16);
-end;
-
-{ TmodHttpRequest }
-
-function ThttpModules.CreateRequest(Astream: TmnBufferStream): TmodRequest;
-begin
-  Result := TmodHttpRequest.Create(nil, Astream);
-end;
-
-procedure TmodHttpRequest.DoPrepareHeader;
-begin
-  inherited;
-  PutHeader('User-Agent', UserAgent);
-end;
-
-{ TmodHttpRequest }
-
-procedure TmodHttpRequest.Created;
-begin
-  inherited;
-  Accept := '*/*';
-  UserAgent := sUserAgent;
+  Result := TwebRequest.Create(nil, Astream);
 end;
 
 initialization
   modLock := TCriticalSection.Create;
-
 finalization
   FreeAndNil(modLock);
 end.

@@ -5,6 +5,7 @@
 {$modeswitch arrayoperators}
 {$modeswitch arraytodynarray}
 {$modeswitch functionreferences}{$modeswitch anonymousfunctions}
+{$WARN 5024 off : Parameter "$1" not used}
 {$ENDIF}
 {$H+}{$M+}
 {**
@@ -18,14 +19,14 @@
  *}
 
 {
-            Userinfo       Host      Port
-            ┌──┴───┐ ┌──────┴────────┬┴┐
+   Protocol UserInfo       Host      Port
+    ┌─┴─┐   ┌──┴───┐ ┌──────┴────────┬┴┐
 GET https://john.doe@www.example.com:123/username/forum/questions/qst1/?tag=networking&order=newest#top
-                     └──────┬──────┘    └───────────────┬────────┘└───────────┬─────────────┘ └┬─┘
-                       DomainName                      Path(Full)           Query             Fragment
-                                        └───┬───┘└──┬──┘└──┬─────┘──┬─┘         ┬
-                                        Directory Alias   Schema  Path      Params
-    └────────────────────────┬─────────┘─ ─ ┘    Module Name
+└┬┘                  └──────┬──────┘    └───────────────┬─────────────┘└────────────┬─────────────┘└─┬─┘
+Method                  DomainName                    Path(Full)                  Query           Fragment
+                                        └───┬───┘└──┬──┘└───┬────┴──┬─┘             ┬
+                                        Directory Alias   Schema   Path            Params
+    └────────────────────────┬─────────┘─ ─ ┘     /Module
                           HomeURL
 }
 
@@ -66,10 +67,12 @@ GET https://john.doe@www.example.com:123/username/forum/questions/qst1/?tag=netw
   https://github.com/mdbootstrap/mdb-ui-kit
 
   Testing
+
     https://pagespeed.web.dev/analysis/http-dirkey-ddns-net-home-demo/zourq3i3sg?form_factor=mobile
 
-Good example:
-  https://bootstrapmade.com/demo/templates/NiceAdmin/index.html
+  Good example:
+
+    https://bootstrapmade.com/demo/templates/NiceAdmin/index.html
 }
 
 interface
@@ -261,7 +264,7 @@ type
     Element: TmnwElement;
     Renderer: TmnwRenderer;
 
-    SessionID: string;
+    SessionID: String;
     Stamp: string; //IfNone-Match
     Route: string;
     Directory: string;
@@ -269,8 +272,13 @@ type
     ParentRenderer: TmnwElementRenderer;
     Writer: TmnwWriter;
     Data: TmnMultipartData;
+    //this get path with host/directory/
     function GetPath: string; overload;
+    //this get absolute path with host/directory/alias/schema/element
     function GetPath(e: TmnwElement): string; overload;
+    //this get absolute path with host/directory/alias/schema/
+    function GetSchemaURL: string;
+    //this get absolute path with host/directory/alias/assets/
     function GetAssetsURL: string;
   end;
 
@@ -353,6 +361,8 @@ type
 
   TActionProc = reference to procedure (const AContext: TmnwContext; AResponse: TmnwResponse);
 
+  TmnwServeFiles = set of (serveAllow, serveIndex, serveDefault, serveRender);
+
   { TmnwElement }
 
   TmnwElement = class(TmnObjectList<TmnwElement>)
@@ -386,6 +396,8 @@ type
     procedure Check; virtual;
     function FindObject(ObjectClass: TmnwElementClass; AName: string; RaiseException: Boolean = false): TmnwElement;
 
+    procedure ServeFile(HomePath: string; Options: TmnwServeFiles; DefaultDocuments: TStringList; const AContext: TmnwContext; AResponse: TmnwResponse);
+
     procedure DoPrepare; virtual;
     procedure DoCompose; virtual;
     procedure DoComposed; virtual;
@@ -397,8 +409,11 @@ type
     procedure Execute;
     procedure DoChanged; virtual;
     procedure Changed;
-    procedure Prepare;
-    procedure SendMessage(AMessage: string); overload;
+    procedure Prepare; virtual;
+
+    procedure SendMessage(AttachmentName:string; AMessage: string); overload;
+    procedure SendInteractive(AMessage: string); overload;
+
     procedure SendMessage(JSON: TDON_Pair); overload; virtual;
     procedure ReceiveMessage(JSON: TDON_Pair); virtual;
     function GenHandle: Integer;
@@ -425,7 +440,14 @@ type
     property Schema: TmnwSchema read FSchema;
     property Parent: TmnwElement read FParent;
 
+    //GetPath get path to the schema, not to domain/host
+    //Use Contex.GetPath(e) to get path to the module/alias name
+    //this get path with schema/element/element/element
     function GetPath: string;
+    //this get path without schema name, element/element/element
+    function GetRelativePath: string; overload;
+    //this get path without schema and parent element name, element/element
+    function GetRelativePath(ToElement: TmnwElement): string; overload;
 
     function CreateRender(const Context: TmnwContext): TmnwElementRenderer;
     procedure Compose; virtual;
@@ -514,8 +536,9 @@ type
 
   { TmnwAttachment }
 
-  TmnwAttachment = class(TObject)
+  TmnwAttachment = class(TmnNamedObject)
   private
+    FInteractive: Boolean;
     FTerminated: Boolean;
     procedure SendMessage(const Message: string);
   protected
@@ -526,11 +549,12 @@ type
     Stream: TmnBufferStream;
     destructor Destroy; override;
     property Terminated: Boolean read FTerminated;
+    property Interactive: Boolean read FInteractive;
   end;
 
   { TmnwAttachments }
 
-  TmnwAttachments = class(TmnObjectList<TmnwAttachment>)
+  TmnwAttachments = class(TmnNamedObjectList<TmnwAttachment>)
   private
     FLock: TCriticalSection;
   protected
@@ -539,7 +563,8 @@ type
     constructor Create;
     destructor Destroy; override;
     procedure Terminate;
-    procedure SendMessage(const Message: string);
+    procedure SendMessage(const Message: string); overload;
+    procedure SendMessage(const AttachmentName: string; const Message: string); overload;
     procedure Add(AAttachment: TmnwAttachment);
     procedure Remove(AAttachment: TmnwAttachment);
     property Lock: TCriticalSection read FLock;
@@ -548,6 +573,7 @@ type
   TmnwSchamaCapability = (
     schemaStartup, //* Create it when registered
     schemaSession,
+    schemaAttach, //Allow websocket connections, Interactive also allow websocket
     schemaPermanent, //* Not deleted when restart server
     schemaDynamic  //* dynamic, do not add it to the list, not cached, becareful
   );
@@ -569,30 +595,29 @@ type
   private
     FAttached: Boolean;
     FAttachments: TmnwAttachments;
-    FDefaultDocument: TStringList;
+    FDefaultDocuments: TStringList;
     FLock: TCriticalSection;
     FApp: TmnwApp;
     FPhase: TmnwSchemaPhase;
     FNamingLastNumber: THandle;
     function GetReleased: Boolean;
-    procedure SetDefaultDocument(AValue: TStringList);
+    procedure SetDefaultDocuments(AValue: TStringList);
   protected
     Usage: Integer;
     procedure UpdateAttached;
-    function GetDefaultDocument(vRoot: string): string; virtual;
     class procedure Registered; virtual;
     procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
-    procedure DoAccept(var Resume: Boolean); virtual;
-    procedure ProcessMessage(const s: string);
-    property DefaultDocument: TStringList read FDefaultDocument write SetDefaultDocument;
+    procedure DoAccept(const AContext: TmnwContext; var Resume: Boolean); virtual;
+    procedure AttachedMessage(const s: string); virtual; //from websocket
+    procedure InteractiveMessage(const s: string);
+    property DefaultDocuments: TStringList read FDefaultDocuments write SetDefaultDocuments;
   public
     LastAccess: TDateTime;
     IsManual: Boolean;
     Direction: TDirection;
     RefreshInterval: Integer; //* in seconds, for refresh elements that need auto refresh
     HomePath: string;
-    ServeFiles: Boolean;
-    AllowIndex: Boolean;
+    ServeFiles: TmnwServeFiles;
     SessionID: string;
     Interactive: Boolean;
     constructor Create(AApp: TmnwApp; AName:string; ARoute: string = ''); reintroduce;
@@ -601,11 +626,13 @@ type
     class function GetCapabilities: TmnwSchemaCapabilities; virtual;
     function NewHandle: THandle;
 
+    function GetHomePath: string;
     //* Attaching cap
     //function Interactive: Boolean;
 
-    function Accept: Boolean;
+    function Accept(const AContext: TmnwContext): Boolean;
     procedure Compose; override;
+    procedure Prepare; override;
 
     // Executed from a thread of connection of WebSocket, it stay inside until the disconnect or terminate
     procedure Attach(Route: string; Sender: TObject; AStream: TmnBufferStream); // in connection thread
@@ -782,7 +809,6 @@ type
     FAppPath: string;
     FAssets: TAssetsSchema;
     FLock: TCriticalSection;
-    FSessionTimeout: Integer;
     FShutdown: Boolean;
     FWorkPath: string;
   protected
@@ -790,12 +816,16 @@ type
     procedure Created; override;
     procedure ClearSchemas;
   public
+    Started: Boolean;
+    InstanceUID: TGUID;
+    InstanceDate: TDateTime;
     IsSSL: Boolean;
     Domain: string; //localhost
     Port: string;
     Alias: string; //ModuleName
     CompactMode: Boolean;
     IsLocal: Boolean;
+    DefaultAge: Integer;
     constructor Create;
     destructor Destroy; override;
     procedure Start;
@@ -819,7 +849,6 @@ type
     function GetHostURL: string; virtual;
 
     property Lock: TCriticalSection read FLock;
-    property SessionTimeout: Integer read FSessionTimeout write FSessionTimeout; //in seconds
     property Assets: TAssetsSchema read FAssets;
     property HomePath: string read FHomePath write FHomePath;
     property WorkPath: string read FWorkPath write FWorkPath;
@@ -878,7 +907,7 @@ type
 
       { THTMLElement }
 
-      THTMLElement = class abstract(TmnwElement)
+      THTMLElement = class(TmnwElement)
       protected
       public
       end;
@@ -942,6 +971,7 @@ type
         procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
       public
         HomePath: string;
+        AllowIndex: Boolean;
         function GetContentType(Route: string): string; override;
       end;
 
@@ -1780,18 +1810,23 @@ type
     function Find(AElementClass: TmnwElementClass; Nearst: Boolean = False): TmnwRendererRegister;
   end;
 
-  TmnwResponse = class(TmodHttpRespond)
+  TmnwResponse = class(TwebRespond)
   private
     FResume: Boolean;
+    FSession: TmnwCookie;
+  protected
+    procedure DoPrepareHeader; override; //Called by Server
+    procedure DoWriteCookies; override;
+    procedure Created; override;
   public
-    SessionID: string;
-    Location: string; //* New location to forward
+    destructor Destroy; override;
+    property Session: TmnwCookie read FSession;
     property Resume: Boolean read FResume write FResume;
   end;
 
   { TUIWebCommand }
 
-  TUIWebCommand = class(TmodHttpCommand)
+  TUIWebCommand = class(TwebCommand)
   private
     function GetModule: TUIWebModule;
     function GetRespond: TmnwResponse;
@@ -1810,6 +1845,7 @@ type
   private
   protected
     FLogo: THTML.TMemory;
+
     procedure DoPrepare; override;
     procedure DoCompose; override;
     procedure Created; override;
@@ -1818,7 +1854,7 @@ type
     destructor Destroy; override;
     class function GetCapabilities: TmnwSchemaCapabilities; override;
     property Logo: THTML.TMemory read FLogo;
-
+    procedure Prepare; override;
   end;
 
   { TUIWebModule }
@@ -1973,8 +2009,6 @@ begin
     styleDanger: Result := Prefix + 'danger';
     styleWarning: Result := Prefix + 'warning';
     styleInfo: Result := Prefix + 'info';
-  else
-    Result := '';
   end;
 end;
 
@@ -2211,6 +2245,28 @@ end;
 procedure TmnwAttachment.Loop;
 var
   s: string;
+  lCmd, lValue, eol: string;
+  procedure DetectEOL;
+  begin
+    if RightStr(s, 2) = sWinEndOfLine then
+      eol := sWinEndOfLine
+    else if RightStr(s, 1) = sUnixEndOfLine then
+      eol := sUnixEndOfLine
+    else if RightStr(s, 1) = sMacEndOfLine then
+      eol := sMacEndOfLine
+    else
+      eol := '';
+    lCmd := SubStr(s, 1, -eol.Length);
+    SpliteStr(lCmd, ' ', lCmd, lValue);
+  end;
+
+  procedure MessageIt;
+  begin
+    if Interactive then
+      Schema.InteractiveMessage(s)
+    else
+      Schema.AttachedMessage(s)
+  end;
 begin
   while not Terminated and Stream.Connected and not (cloTransmission in Stream.State) do
   begin
@@ -2222,12 +2278,41 @@ begin
       finally
         Schema.Attachments.Lock.Leave;
       end;}
-      if s.StartsWith('{') then
-        Schema.ProcessMessage(s)
-      else if s = 'attach' then
-        Stream.WriteUTF8Line('attached')
+      if Interactive then // It is json
+        Schema.InteractiveMessage(s)
       else
-        Schema.ProcessMessage(s);
+      begin
+        if s.StartsWith('{') then
+          Schema.AttachedMessage(s)
+        else
+        begin
+          if CompareLeftStr(s,'echo') then
+          begin
+            DetectEOL;
+            Stream.WriteUTF8String(lValue + eol); //testing propuse
+          end
+          else if Schema.Interactive then
+          begin
+            DetectEOL;
+            if (lCmd = 'attach') then
+            begin
+              Stream.WriteUTF8String('attached'+eol);
+              Name := lValue;
+              FInteractive := True;
+            end
+            else if (lCmd = 'interactive') then
+            begin
+              Stream.WriteUTF8String('attached'+eol);
+              Name := ''; // no name
+              FInteractive := True;
+            end
+            else
+              Schema.AttachedMessage(s);
+          end
+          else
+            Schema.AttachedMessage(s);
+        end;
+      end;
     end;
   end;
 end;
@@ -2280,18 +2365,8 @@ begin
 end;
 
 procedure TmnwAttachments.SendMessage(const Message: string);
-var
-  Attachment: TmnwAttachment;
 begin
-  Lock.Enter;
-  try
-    for Attachment in Self do
-    begin
-      Attachment.SendMessage(Message);
-    end;
-  finally
-    Lock.Leave;
-  end;
+  SendMessage('', Message);
 end;
 
 procedure TmnwAttachments.Add(AAttachment: TmnwAttachment);
@@ -2309,6 +2384,22 @@ begin
   Lock.Enter;
   try
     inherited Remove(AAttachment);
+  finally
+    Lock.Leave;
+  end;
+end;
+
+procedure TmnwAttachments.SendMessage(const AttachmentName, Message: string);
+var
+  Attachment: TmnwAttachment;
+begin
+  Lock.Enter;
+  try
+    for Attachment in Self do
+    begin
+      if (Attachment.Name = '') or SameText(AttachmentName, Attachment.Name) then
+        Attachment.SendMessage(Message);
+    end;
   finally
     Lock.Leave;
   end;
@@ -2671,15 +2762,22 @@ begin
 end;
 
 procedure TmnwApp.Start;
+var
+  item: TmnwSchema;
 begin
   FShutdown := False;
-  FAssets.Prepare;
+  for item in Self do
+  begin
+    item.Prepare;
+  end;
+  Started := True;
 end;
 
 procedure TmnwApp.Stop;
 begin
   FShutdown := True;
   ClearSchemas;
+  Started := False;
 end;
 
 function TmnwApp.RegisterSchema(const AName: string; SchemaClass: TmnwSchemaClass): TmnwSchema;
@@ -2724,6 +2822,8 @@ begin
   begin
     Result := CreateSchema(SchemaItem.SchemaClass, SchemaItem.Name, Fallback);
     SchemaCreated(Result);
+    if Started then
+      Result.Prepare;
     //Add(SchemaObject); no, when compose it we add it
   end
   else
@@ -2731,16 +2831,14 @@ begin
 end;
 
 function TmnwApp.ReleaseSchema(const aSchemaName: string; aSessionID: string): TmnwSchema;
-var
-  aSchema: TmnwSchema;
 begin
   Lock.Enter;
   try
-    aSchema := FindBy(aSchemaName, aSessionID);
-    if aSchema <> nil then
+    Result := FindBy(aSchemaName, aSessionID);
+    if Result <> nil then
     begin
-      Extract(aSchema);
-      aSchema.FPhase := scmpReleased;
+      Extract(Result);
+      Result.FPhase := scmpReleased;
     end;
   finally
     Lock.Leave
@@ -2759,7 +2857,7 @@ begin
   Result := False;
   Routes := TStringList.Create;
   try
-    StrToStrings(AContext.Route, Routes, ['/']);
+    StrToStrings(AContext.Route, Routes, [URLPathDelim]);
     if (Routes.Count > 0) then
       aSchemaName := Routes[0]
     else
@@ -2797,11 +2895,13 @@ begin
       Schema := First; //* fallback //taskeej
 }
     if aSchemaName <> '' then
+    begin
       if (Routes.Count > 0) then
       begin
         Routes.Delete(0);
         AContext.Route := DeleteSubPath(aSchemaName, AContext.Route);
       end;
+    end;
 
     Lock.Enter;
     try
@@ -2813,7 +2913,7 @@ begin
 
     if (Schema <> nil) then
     begin
-      if Schema.Accept then
+      if Schema.Accept(AContext) then
       begin
         if not (estComposed in Schema.State) then
         begin
@@ -2869,21 +2969,6 @@ begin
 end;
 
 procedure TmnwApp.Respond(var AContext: TmnwContext; AResponse: TmnwResponse);
-
-  function SessionCookies(const vData: string): string;
-  var
-    aDate: TDateTime;
-    aPath, aDomain: string;
-  begin
-    aDate := IncSecond(Now, SessionTimeout);
-    aPath := '';
-
-    if vData<>'' then
-      Result := Format('%s; Expires=%s; SameSite=None; Domain=%s; Path=/%s; Secure', [vData, FormatHTTPDate(aDate), Domain, aPath.ToLower])
-    else
-      Result := Format('; max-age=0; SameSite=None; Domain=%s; Path=/%s; Secure', [Domain, aPath.ToLower]);
-  end;
-
 var
   aSchema: TmnwSchema;
   aElement: TmnwElement;
@@ -2898,15 +2983,26 @@ begin
       aContext.Schema := aSchema;
       aContext.Element := aElement;
 
-      AResponse.ContentType := aElement.GetContentType(AContext.Route);
+      AResponse.Session.Value := AResponse.Request.GetCookie('', 'session');
+      AResponse.Session.Age := DefaultAge;
+      AResponse.Session.Domain := Domain;
+      AResponse.Session.Path:= AddStartURLDelimiter(Alias, True);
+      AResponse.Session.ResetChanged;
+      AResponse.Answer := hrOK;
+      AResponse.Resume := True;
+      AResponse.Location := '';
 
-      aElement.Action(AContext, AResponse);
+      if (aElement = aSchema) and (AContext.Route = '') then
+      begin
+        AResponse.Location := IncludeURLDelimiter(AContext.GetPath(aSchema));
+        AResponse.Resume := False;
+        AResponse.Answer := hrRedirect;
+      end
+      else
+        AResponse.ContentType := aElement.GetContentType(AContext.Route);
 
-      if AResponse.Location <> '' then
-        AResponse.Header['Location'] := AResponse.Location;
-
-      if AResponse.SessionID<>'' then
-        AResponse.Cookies.Values['session'] := SessionCookies(AResponse.SessionID);
+      if AResponse.Resume then
+        aElement.Action(AContext, AResponse);
 
       //* We will render it now
       if AResponse.Resume then
@@ -2914,28 +3010,25 @@ begin
 
       if not (AResponse.IsHeaderSent) then
       begin
-        if (AResponse.HttpResult = hrOK) and (AResponse.Resume = False) then
+        if (AResponse.Answer =hrOK) and (AResponse.Resume = False) then
         begin
-          AResponse.HttpResult := hrNoContent;
+          AResponse.Answer := hrNoContent;
           AResponse.ContentLength := 0;
         end
-        else if AResponse.HttpResult = hrNotFound then
+        else if AResponse.Answer = hrNotFound then
         begin
           AResponse.ContentType := 'text/html';
-          AContext.Writer.WriteLn('404 Not Found');
+          AResponse.SendUTF8String('404 Not Found');
         end;
-
-        if not (AResponse.IsHeaderSent) and (AResponse.HttpResult > hrNone) then
-          AResponse.SendHeader;
       end;
     end
     else
     begin
       if not (AResponse.IsHeaderSent) then
       begin
-        AResponse.HttpResult := hrNotFound;
+        AResponse.Answer := hrNotFound;
         AResponse.ContentType := 'text/html';
-        AContext.Writer.WriteLn('404 Not Found');
+        AResponse.SendUTF8String('404 Not Found');
       end;
     end;
 
@@ -2965,10 +3058,10 @@ begin
     begin
       if not (AResponse.IsHeaderSent) then
       begin
-        AResponse.HttpResult := hrError;
+        AResponse.Answer := hrError;
         AResponse.ContentType := 'text/html';
       end;
-      AContext.Writer.WriteLn('Server Error: ' + E.Message);
+      AResponse.SendUTF8String('Server Error: ' + E.Message);
     end;
     {$else}
       raise;
@@ -2983,6 +3076,7 @@ var
   aRoute: string;
   aSchema: TmnwSchema;
 begin
+  Result := nil;
   if Shutdown then
     exit(nil);
 
@@ -2990,7 +3084,7 @@ begin
   Routes := TStringList.Create;
   try
     i := 0;
-    StrToStrings(AContext.Route, Routes, ['/']);
+    StrToStrings(AContext.Route, Routes, [URLPathDelim]);
     if (i<Routes.Count) then
     begin
       aRoute := Routes[i];
@@ -3001,9 +3095,12 @@ begin
     if aSchema = nil then
       aSchema := First; //* fallback
 
-    if aSchema <> nil then
+    if (aSchema <> nil) then
     begin
-      DeleteSubPath(aRoute, AContext.Route);
+      if aSchema.Interactive or (schemaAttach in aSchema.GetCapabilities) then
+        DeleteSubPath(aRoute, AContext.Route)
+      else
+        exit(nil);
     end;
   finally
     Routes.Free;
@@ -3019,8 +3116,6 @@ end;
 
 procedure TmnwApp.SchemaCreated(Schema: TmnwSchema);
 begin
-  if Schema.HomePath = '' then
-    Schema.HomePath := HomePath;
 end;
 
 procedure TmnwApp.Created;
@@ -3049,8 +3144,11 @@ end;
 
 constructor TmnwApp.Create;
 begin
+  InstanceUID := TGUID.NewGuid;
+  FileAge(ParamStr(0), InstanceDate);
   FLock := TCriticalSection.Create;
   FRegistered := TRegisteredSchemas.Create;
+  DefaultAge := -1; //Forever
   inherited;
 end;
 
@@ -3431,6 +3529,7 @@ begin
   case e.Shadow of
     shadowLight: Scope.Classes.Add('shadow-sm');
     ShadowHeavy: Scope.Classes.Add('shadow-thin');
+    else ;
   end;
   inherited;
 end;
@@ -3472,7 +3571,8 @@ begin
   Context.Writer.OpenTag('html', Scope.ToString);
   Context.Writer.OpenTag('head');
   Context.Writer.AddTag('title', '', e.Title);
-  Context.Writer.AddShortTag('link', 'rel="shortcut icon" href="#"');
+  //Context.Writer.AddShortTag('link', 'rel="shortcut icon" href="#"');
+  Context.Writer.AddShortTag('link', 'rel="icon" href="data:,"'); //disable call favicon.ico
   Context.Writer.AddShortTag('meta', 'charset="UTF-8"');
   Context.Writer.AddShortTag('meta', 'name="viewport" content="width=device-width, initial-scale=1"');
   if e.Parent <> nil then // Only root have head
@@ -3655,7 +3755,7 @@ begin
   else if e.PostTo.Where = toElement then
     aPostTo := Context.GetPath(e)
   else if e.PostTo.Where = toHome then
-    aPostTo := '/';
+    aPostTo := URLPathDelim;
   Context.Writer.OpenTag('form', 'method="post"'+ NV('action', aPostTo) + ' enctype="multipart/form-data"' + Scope.GetText);
   inherited;
   if e.RedirectTo <> '' then
@@ -3849,11 +3949,11 @@ constructor TmnwSchema.Create(AApp: TmnwApp; AName: string; ARoute: string);
 begin
   inherited Create(nil);
   FApp := AApp;
-  FDefaultDocument := TStringList.Create;
-  FDefaultDocument.Add('index.html');
-  FDefaultDocument.Add('index.htm');
-  FDefaultDocument.Add('default.html');
-  FDefaultDocument.Add('default.htm');
+  FDefaultDocuments := TStringList.Create;
+  FDefaultDocuments.Add('index.html');
+  FDefaultDocuments.Add('index.htm');
+  FDefaultDocuments.Add('default.html');
+  FDefaultDocuments.Add('default.htm');
   FName := AName;
   if ARoute = '' then
     FRoute := FName
@@ -3875,7 +3975,7 @@ begin
   FAttachments.Clear;
   FreeAndNil(FAttachments);
   FreeAndNil(FLock);
-  FreeAndNil(FDefaultDocument);
+  FreeAndNil(FDefaultDocuments);
   inherited;
 end;
 
@@ -3898,106 +3998,143 @@ begin
   end;
 end;
 
-procedure TmnwSchema.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwSchema.AttachedMessage(const s: string);
+begin
+end;
+
+procedure TmnwElement.SendMessage(AttachmentName, AMessage: string);
+begin
+  if Schema <> nil then
+    Schema.Attachments.SendMessage('', AMessage);
+end;
+
+procedure TmnwElement.ServeFile(HomePath: string; Options: TmnwServeFiles; DefaultDocuments: TStringList; const AContext: TmnwContext; AResponse: TmnwResponse);
+
+  function GetDefaultDocument(vRoot: string): string;
+  var
+    i: Integer;
+    aFile: string;
+  begin
+    if DefaultDocuments= nil then
+      exit(vRoot);
+    //TODO baaad you need to lock before access
+    vRoot := IncludePathDelimiter(vRoot);
+    for i := 0 to DefaultDocuments.Count - 1 do
+    begin
+      aFile := vRoot + DefaultDocuments[i];
+      if FileExists(aFile) then
+      begin
+        Result := aFile;
+        Exit;
+      end;
+    end;
+
+    if DefaultDocuments.Count <> 0 then
+      Result := vRoot + DefaultDocuments[0]
+    else
+      Result := vRoot;
+  end;
+
 var
   fs: TFileStream;
   aFileName: string;
-  aHomePath: string;
   files: TStringList;
   s: string;
-begin
-  inherited;
-  if ServeFiles and (AContext.Route <> '') then
-  begin
-    aHomePath := When(HomePath, App.FHomePath);
-    if aHomePath <> '' then
-    begin
-      if WebExpandFile(aHomePath, AContext.Route, aFileName) then
-      begin
-        if AllowIndex and EndsDelimiter(aFileName) then
-        begin
-          AResponse.ContentType := DocumentToContentType('html');
-          files := TStringList.Create;
-          try
-            AContext.Writer.WriteLn('<!DOCTYPE html>');
-            AContext.Writer.OpenTag('html');
-            AContext.Writer.OpenTag('head');
-            AContext.Writer.AddTag('title', '', 'Index of ' + aFileName);
-            AContext.Writer.AddTag('style', '', 'body { font-family: monospace; }');
-            AContext.Writer.CloseTag('head');
-            AContext.Writer.OpenTag('body');
-            EnumFiles(files, aFileName, '*.*', [efDirectory]);
-            AContext.Writer.AddTag('h1', '', 'Index of ' + AContext.Route);
-            AContext.Writer.AddTag('h2', '', 'Folders');
-            AContext.Writer.OpenTag('ul', '', '');
-            for s in files do
-            begin
-              if not StartsText('.', s) then
-              begin
-                AContext.Writer.OpenInlineTag('ui');
-                AContext.Writer.AddInlineTag('a', 'href="' + s + '\"', s);
-                AContext.Writer.AddInlineShortTag('br');
-                AContext.Writer.CloseTag('ui');
-              end;
-            end;
-            AContext.Writer.CloseTag('ul');
-            AContext.Writer.AddTag('h2', '', 'Files');
-            files.Clear;
-            EnumFiles(files, aFileName, '*.*', [efFile]);
-            AContext.Writer.OpenTag('ul', '', '');
-            for s in files do
-            begin
-              if not StartsText('.', s) then
-              begin
-                AContext.Writer.OpenInlineTag('ui');
-                AContext.Writer.AddInlineTag('a', 'href="' + s + '"', s);
-                AContext.Writer.AddInlineShortTag('br');
-                AContext.Writer.CloseTag('ui');
-              end;
-            end;
-            AContext.Writer.CloseTag('ul');
-            AContext.Writer.CloseTag('body');
-            AContext.Writer.CloseTag('html');
-          finally
-            files.Free;
-          end;
-        end
-        else
-        begin
-          if EndsDelimiter(aFileName) then
-            aFileName := GetDefaultDocument(aFileName);
 
-          if FileExists(aFileName) and not StartsText('.', ExtractFileName(aFileName)) then //no files starts with dots
+begin
+  if HomePath <> '' then
+  begin
+    if WebExpandFile(HomePath, AContext.Route, aFileName) then
+    begin
+      if (serveIndex in Options) and EndsDelimiter(aFileName) then
+      begin
+        AResponse.ContentType := DocumentToContentType('html');
+        files := TStringList.Create;
+        try
+          AContext.Writer.WriteLn('<!DOCTYPE html>');
+          AContext.Writer.OpenTag('html');
+          AContext.Writer.OpenTag('head');
+          AContext.Writer.AddTag('title', '', 'Index of ' + aFileName);
+          AContext.Writer.AddTag('style', '', 'body { font-family: monospace; }');
+          AContext.Writer.CloseTag('head');
+          AContext.Writer.OpenTag('body');
+          EnumFiles(files, aFileName, '*.*', [efDirectory]);
+          AContext.Writer.AddTag('h1', '', 'Index of ' + AContext.Route);
+          AContext.Writer.AddTag('h2', '', 'Folders');
+          AContext.Writer.OpenTag('ul', '', '');
+          for s in files do
           begin
-            fs := TFileStream.Create(aFileName, fmShareDenyWrite or fmOpenRead);
-            try
-              AResponse.ContentLength := GetSizeOfFile(aFileName); //conseder use fs.Size
-              AResponse.ContentType := DocumentToContentType(aFileName);
-              //AContext.Writer.WriteStream(fs, 0);
-              AResponse.SendData(fs, AResponse.ContentLength);
-            finally
-              fs.Free;
+            if not StartsText('.', s) then
+            begin
+              AContext.Writer.OpenInlineTag('ui');
+              AContext.Writer.AddInlineTag('a', 'href="' + s + '\"', s);
+              AContext.Writer.AddInlineShortTag('br');
+              AContext.Writer.CloseTag('ui');
             end;
-          end
-          else
-            AResponse.HttpResult := hrNotFound;
+          end;
+          AContext.Writer.CloseTag('ul');
+          AContext.Writer.AddTag('h2', '', 'Files');
+          files.Clear;
+          EnumFiles(files, aFileName, '*.*', [efFile]);
+          AContext.Writer.OpenTag('ul', '', '');
+          for s in files do
+          begin
+            if not StartsText('.', s) then
+            begin
+              AContext.Writer.OpenInlineTag('ui');
+              AContext.Writer.AddInlineTag('a', 'href="' + s + '"', s);
+              AContext.Writer.AddInlineShortTag('br');
+              AContext.Writer.CloseTag('ui');
+            end;
+          end;
+          AContext.Writer.CloseTag('ul');
+          AContext.Writer.CloseTag('body');
+          AContext.Writer.CloseTag('html');
+        finally
+          files.Free;
         end;
       end
       else
-        AResponse.HttpResult := hrUnauthorized;
+      begin
+        if EndsDelimiter(aFileName) and (serveDefault in Options) then
+          aFileName := GetDefaultDocument(aFileName);
+
+        if FileExists(aFileName) then
+        begin
+          if not StartsText('.', ExtractFileName(aFileName)) then //no files starts with dots, TODO no folders in path
+            AResponse.SendFile(aFileName, AContext.Stamp)
+          else
+            AResponse.Answer := hrForbidden;
+        end
+        else
+        begin
+          if (AContext.Route = '') or (AContext.Route = URLPathDelim) then
+            Render(AContext, AResponse)
+          else
+            AResponse.Answer := hrNotFound;
+        end;
+      end;
     end
     else
-      Render(AContext, AResponse);
+      AResponse.Answer := hrUnauthorized;
   end
   else
     Render(AContext, AResponse);
 end;
 
-procedure TmnwSchema.DoAccept(var Resume: Boolean);
+procedure TmnwSchema.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+begin
+  if serveAllow in ServeFiles then
+    ServeFile(GetHomePath, ServeFiles, DefaultDocuments, AContext, AResponse)
+  else
+    Render(AContext, AResponse);
+end;
+
+procedure TmnwSchema.DoAccept(const AContext: TmnwContext; var Resume: Boolean);
 begin
 end;
 
-procedure TmnwSchema.ProcessMessage(const s: string);
+procedure TmnwSchema.InteractiveMessage(const s: string);
 var
   Json: TDON_Pair;
   element: TmnwElement;
@@ -4058,10 +4195,10 @@ begin
   Result := [];
 end;
 
-function TmnwSchema.Accept: Boolean;
+function TmnwSchema.Accept(const AContext: TmnwContext): Boolean;
 begin
   Result := True;
-  DoAccept(Result);
+  DoAccept(AContext, Result);
 end;
 
 {function TmnwSchema.Interactive: Boolean;
@@ -4077,20 +4214,35 @@ begin
   AddState([estComposed]);
 end;
 
+procedure TmnwSchema.Prepare;
+begin
+  if (HomePath = '') then
+    HomePath := App.HomePath;
+  inherited;
+end;
+
 function TmnwSchema.GetReleased: Boolean;
 begin
   Result := (FPhase = scmpReleased) or (schemaDynamic in GetCapabilities);
 end;
 
-procedure TmnwSchema.SetDefaultDocument(AValue: TStringList);
+procedure TmnwSchema.SetDefaultDocuments(AValue: TStringList);
 begin
-  FDefaultDocument.Assign(AValue);
+  FDefaultDocuments.Assign(AValue);
 end;
 
 function TmnwSchema.NewHandle: THandle;
 begin
   AtomicIncrement(FNamingLastNumber);
   Result := FNamingLastNumber;
+end;
+
+function TmnwSchema.GetHomePath: string;
+begin
+  if HomePath = '' then
+    Result := App.HomePath
+  else
+    Result := HomePath;
 end;
 
 procedure TmnwSchema.UpdateAttached;
@@ -4103,7 +4255,7 @@ begin
   end;
 end;
 
-function TmnwSchema.GetDefaultDocument(vRoot: string): string;
+{function TmnwSchema.GetDefaultDocument(vRoot: string): string;
 var
   i: Integer;
   aFile: string;
@@ -4124,7 +4276,7 @@ begin
     Result := vRoot + DefaultDocument[0]
   else
     Result := vRoot;
-end;
+end;}
 
 { TmnwSchema.TElement }
 
@@ -4215,7 +4367,7 @@ begin
   if FValue =AValue then Exit;
   FValue :=AValue;
   if (estComposed in State) and (Schema <> nil) and Schema.Attached then
-    SendMessage('"command": "change", "content": ' + DQ(Value));
+    SendInteractive('"command": "change", "content": ' + DQ(Value));
 end;
 
 procedure THTML.TInput.SetCaption(const AValue: string);
@@ -4271,13 +4423,13 @@ end;
 procedure THTML.TMemoryImage.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
 begin
   Data.Seek(0, soBeginning);
-  AContext.Writer.WriteStream(Data, 0);
+  AResponse.SendStream(Data, Data.Size, FileName, AContext.Schema.App.InstanceDate);
 end;
 
 procedure THTML.TMemoryImage.LoadFromFile(const AFileName: string);
 begin
   Data.LoadFromFile(AFileName);
-  FileName := ExtractFilePath(ExtractFileName(AFileName));
+  FileName := ExtractFileName(AFileName);
 end;
 
 procedure THTML.TMemoryImage.LoadFromStream(AStream: TStream);
@@ -4309,7 +4461,39 @@ begin
   else
     Result := Route;
 
-  Result := IncludeURLDelimiter(Result);
+//  Result := IncludeURLDelimiter(Result);
+end;
+
+function TmnwElement.GetRelativePath(ToElement: TmnwElement): string;
+begin
+  if (Self = nil) or (Self <> ToElement) then
+    exit('');
+
+  if (Parent <> nil) then
+  begin
+    if Route <> '' then
+      Result := AddStartURLDelimiter(Parent.GetRelativePath) + Route
+    else
+      Result := Parent.GetRelativePath;
+  end
+  else
+    Result := '';
+end;
+
+function TmnwElement.GetRelativePath: string;
+begin
+  if Self = nil then
+    exit('');
+
+  if (Parent <> nil) then
+  begin
+    if Route <> '' then
+      Result := AddStartURLDelimiter(Parent.GetRelativePath) + Route
+    else
+      Result := Parent.GetRelativePath;
+  end
+  else
+    Result := '';
 end;
 
 procedure TmnwElement.SetState(const AValue: TmnwElementState);
@@ -4496,10 +4680,9 @@ begin
   end;
 end;
 
-procedure TmnwElement.SendMessage(AMessage: string);
+procedure TmnwElement.SendInteractive(AMessage: string);
 begin
-  if Schema <> nil then
-    Schema.Attachments.SendMessage('{"element": ' + DQ(ID) + ', ' + AMessage + '}');
+  SendMessage('', '{"element": ' + DQ(ID) + ', ' + AMessage + '}');
 end;
 
 procedure TmnwElement.SendMessage(JSON: TDON_Pair);
@@ -4594,7 +4777,8 @@ begin
 end;
 
 //in FPC if you got error, change <O: TmnwElement> to <O>
-function TmnwElement.Add<O>(const AID: String; const AName: String): O;
+function TmnwElement.Add<O>(const AID: String; const AName: String
+  ): O;
 begin
   Result := O.Create(Self);
   Result.FID := AID;
@@ -4683,7 +4867,6 @@ procedure TmnwElement.Action(const AContext: TmnwContext; AResponse: TmnwRespons
 begin
   AResponse.PutHeader('Content-Type', GetContentType(AContext.Route));
   DoRespondHeader(AContext);
-  AResponse.Resume := True;
   DoAction(AContext, AResponse);
   if AResponse.Resume and Assigned(FOnAction) then
     FOnAction(AContext, AResponse);
@@ -4819,10 +5002,8 @@ end;
 
 procedure TmnwSchema.TFile.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
 var
-  aStream: TStream;
-  aDocSize: Int64;
+  aStream: TResourceStream;
   aDate: TDateTime;
-  aEtag, aFTag: string;
 begin
   inherited;
   if ftResource in Options then
@@ -4833,46 +5014,13 @@ begin
     aStream := TResourceStream.Create(hInstance, ChangeFileExt(FileName, ''), RT_RCDATA); //* remove extension
     {$endif}
     try
-      AContext.Writer.WriteStream(aStream, 0);
+      AResponse.SendStream(aStream, aStream.Size, FileName, AContext.Schema.App.InstanceDate);
     finally
       aStream.Free;
     end;
   end
   else
-  begin
-    if not FileExists(FileName) then
-    begin
-      AResponse.HttpResult := hrNotFound;
-      AResponse.Resume := False;
-      exit;
-    end
-    else
-    begin
-      FileAge(FileName, aDate);
-      aFtag := DateTimeToUnix(aDate).ToString;
-      aEtag := AContext.Stamp;
-      if (aEtag<>'') and (aEtag = aFtag) then
-      begin
-        AResponse.HttpResult := hrNotModified;
-        AResponse.Resume := False;
-        exit;
-      end;
-
-      aStream := TFileStream.Create(FileName, fmShareDenyNone or fmOpenRead);
-      try
-        aDocSize := aStream.Size;
-
-        AResponse.ETag := aFTag;
-        AResponse.Header['Cache-Control']  := 'max-age=600';
-        AResponse.Header['Last-Modified']  := FormatHTTPDate(aDate);
-        AResponse.Header['Content-Length'] := IntToStr(aDocSize);
-
-        AContext.Writer.WriteStream(aStream, 0);
-      finally
-        aStream.Free;
-      end;
-    end;
-  end;
+    AResponse.SendFile(FileName, AContext.Stamp);
 end;
 
 constructor TmnwSchema.TFile.Create(AParent: TmnwElement; AOptions: TFileOptions; AFileName: string; ARoute: string );
@@ -4894,12 +5042,8 @@ end;
 
 procedure TmnwSchema.TMemory.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
 begin
-  if FileDate <> 0 then
-    AResponse.Header['Last-Modified']  := FormatHTTPDate(FileDate);
-  AResponse.Header['Content-Length'] := IntToStr(Data.Size);
-  AResponse.Header['Cache-Control']  := 'public, max-age=3600';
   Data.Seek(0, soBeginning);
-  AContext.Writer.WriteStream(Data, 0);
+  AResponse.SendStream(Data, Data.Size, FileName, FileDate);
 end;
 
 procedure TmnwSchema.TMemory.Created;
@@ -4931,6 +5075,7 @@ procedure TmnwSchema.TMemory.LoadFromStream(AStream: TStream; AContentType: stri
 begin
   Data.LoadFromStream(AStream);
   ContentType := AContentType;
+  FileDate := 0;
   FileName := '';
   FilePath := '';
 end;
@@ -4938,27 +5083,9 @@ end;
 { THTML.TAssets }
 
 procedure THTML.TAssets.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
-var
-  fs: TFileStream;
-  aFileName: string;
 begin
   inherited;
-  if HomePath <> '' then
-  begin
-    if WebExpandFile(HomePath, AContext.Route, aFileName) then
-    begin
-      if FileExists(aFileName) then
-      begin
-        AResponse.ContentLength := GetSizeOfFile(aFileName);
-        fs := TFileStream.Create(aFileName, fmShareDenyWrite or fmOpenRead);
-        try
-          AContext.Writer.WriteStream(fs, 0);
-        finally
-          fs.Free;
-        end;
-      end;
-    end;
-  end;
+  ServeFile(Schema.GetHomePath, [serveDefault], nil, AContext, AResponse);
 end;
 
 function THTML.TAssets.GetContentType(Route: string): string;
@@ -5082,7 +5209,7 @@ end;
 
 procedure TJQuery_LocalLibrary.AddHead(const Context: TmnwContext);
 begin
-  Context.Writer.AddTag('script', 'src="' + Context.GetPath(Context.Schema.App.Assets) + 'jquery.min.js?v=' + IntToStr(Context.Schema.TimeStamp) + '" crossorigin="anonymous"');
+  Context.Writer.AddTag('script', 'src="' + Context.GetAssetsURL + 'jquery.min.js?v=' + IntToStr(Context.Schema.TimeStamp) + '" crossorigin="anonymous"');
 end;
 
 { TWebElements_Library }
@@ -5534,9 +5661,9 @@ end;
 procedure THTML.TForm.DoAction(const AContext: TmnwContext; AResponse: TmnwResponse);
 begin
   inherited;
-  if (RedirectTo <> '') and (AResponse.HttpResult = hrNone) then
+  if (RedirectTo <> '') and (AResponse.Answer = hrNone) then
   begin
-    AResponse.HttpResult := hrRedirect;
+    AResponse.Answer := hrRedirect;
     AResponse.Location := RedirectTo;
   end;
 end;
@@ -5585,7 +5712,7 @@ begin
   if FCaption =AValue then Exit;
   FCaption :=AValue;
   if (estComposed in State) and (Schema <> nil) and Schema.Attached then
-    SendMessage('"command": "change", "content": ' + DQ(Caption));
+    SendInteractive('"command": "change", "content": ' + DQ(Caption));
 end;
 
 { THTML.TClickable }
@@ -5865,24 +5992,25 @@ begin
   else
     SpliteStr(Request.Header['Host'], ':', aDomain, aPort);
 
-  Module.WebApp.Lock.Enter; //smart huh, first connection will setup the domain name, i don't like it
-  try
-    if Module.WebApp.Domain = '' then
-    begin
+  if Module.WebApp.Domain = '' then
+  begin
+    Module.WebApp.Lock.Enter; //smart huh, first connection will setup the domain name, i don't like it
+    try
       Module.WebApp.Domain := aDomain;
       Module.WebApp.Port := aPort;
+    finally
+      Module.WebApp.Lock.Leave;
     end;
-  finally
-    Module.WebApp.Lock.Leave;
   end;
 
-  if aDomain='' then
+  if (aDomain='') and Request.Connected then
     raise Exception.Create('Domain is not defined');
 
   if Request.ConnectionType = ctWebSocket then
   begin
-    (Module as TUIWebModule).WebApp.Attach(aContext, Self, Respond.Stream); //Serve the websocket
-    //Result.Status := Result.Status - [mrKeepAlive]; // Disconnect
+    //Serve the websocket
+    if (Module as TUIWebModule).WebApp.Attach(aContext, Self, Respond.Stream) = nil then
+      Result.Status := []; // Disconnect
   end
   else
   begin
@@ -5897,17 +6025,13 @@ begin
       aContext.Data.Read(Request.Stream);
     end;
     Respond.PutHeader('Content-Type', DocumentToContentType('html'));
-    Respond.HttpResult := hrOK;
+    Respond.Answer := hrOK;
     aContext.Renderer := (Module as TUIWebModule).CreateRenderer;
     aContext.Renderer.RendererID := RendererID;
     aContext.Writer := TmnwWriter.Create('html', Respond.Stream);
     aContext.Writer.Compact := Module.WebApp.CompactMode;
     try
       aContext.Stamp := Request.Header['If-None-Match'];
-
-      Respond.SessionID := Request.GetCookie('', 'session');
-      Respond.HttpResult := hrOK;
-      Respond.Location := '';
 
       (Module as TUIWebModule).WebApp.Respond(aContext, Respond);
 
@@ -5930,7 +6054,7 @@ begin
   FLogo.Name := 'logo';
   FLogo.Route := 'logo';
   FPhase := scmpNormal;
-  ServeFiles := True;
+  ServeFiles := [serveAllow, serveDefault];
 end;
 
 procedure TAssetsSchema.DoPrepare;
@@ -5944,10 +6068,10 @@ begin
   minilib := GetEnvironmentVariable('minilib');
   if minilib = '' then
   begin
-    if FileExists(HomePath + 'mnWebElements.js') then
+    if FileExists(GetHomePath + 'mnWebElements.js') then
     begin
-      TFile.Create(This, [], HomePath + 'mnWebElements.js', 'WebElements.js');
-      TFile.Create(This, [], HomePath + 'mnWebElements.css', 'WebElements.css');
+      TFile.Create(This, [], GetHomePath + 'mnWebElements.js', 'WebElements.js');
+      TFile.Create(This, [], GetHomePath + 'mnWebElements.css', 'WebElements.css');
     end
     else
     begin
@@ -5971,8 +6095,12 @@ end;
 
 class function TAssetsSchema.GetCapabilities: TmnwSchemaCapabilities;
 begin
-  Result := inherited;
-  Result := Result + [schemaStartup, schemaPermanent];
+  Result := inherited + [schemaStartup, schemaPermanent];
+end;
+
+procedure TAssetsSchema.Prepare;
+begin
+  inherited;
 end;
 
 destructor TAssetsSchema.Destroy;
@@ -5991,10 +6119,15 @@ end;
 procedure TUIWebModule.DoPrepareRequest(ARequest: TmodRequest);
 begin
   inherited;
-  if StartsStr('.', ARequest.Route[ARequest.Route.Count - 1]) then
-    ARequest.Command := ARequest.Route[ARequest.Route.Count - 1]
+  if (ARequest.Route.Count > 0) then
+  begin
+    if StartsStr('.', ARequest.Route[ARequest.Route.Count - 1]) then
+      ARequest.Command := ARequest.Route[ARequest.Route.Count - 1]
+    else
+      ARequest.Command := ARequest.Route[1];
+  end
   else
-    ARequest.Command := ARequest.Route[1];
+    ARequest.Command := '';
   //ARequest.Path := DeleteSubPath(ARequest.Command, ARequest.Path);
 end;
 
@@ -6013,7 +6146,7 @@ begin
   if WebApp.Alias = '' then
     WebApp.Alias := AliasName;
 
-  WebApp.Assets.HomePath := WebApp.HomePath;
+  //WebApp.Assets.HomePath := WebApp.HomePath;
 
   WebApp.Start;
 end;
@@ -6313,19 +6446,58 @@ end;
 
 { TmnwContext }
 
-function TmnwContext.GetAssetsURL: string;
-begin
-  Result := GetPath(Schema.App.Assets);
-end;
-
 function TmnwContext.GetPath: string;
 begin
-  Result := '/' + IncludeURLDelimiter(IncludeURLDelimiter(Directory) + Schema.App.Alias);
+  Result := IncludeURLDelimiter(IncludeURLDelimiter(Directory) + Schema.App.Alias);
 end;
 
 function TmnwContext.GetPath(e: TmnwElement): string;
 begin
   Result := IncludeURLDelimiter(GetPath) + e.GetPath
+end;
+
+function TmnwContext.GetSchemaURL: string;
+begin
+  Result := IncludeURLDelimiter(GetPath(Schema));
+end;
+
+function TmnwContext.GetAssetsURL: string;
+begin
+  Result := IncludeURLDelimiter(GetPath(Schema.App.Assets));
+end;
+
+{ TmnwResponse }
+
+procedure TmnwResponse.Created;
+begin
+  inherited;
+  FSession := TmnwCookie.Create('session');
+  FSession.Stricted := True;
+  FSession.Secured := False;
+  FSession.ResetChanged;
+end;
+
+destructor TmnwResponse.Destroy;
+begin
+  FreeAndNil(FSession);
+  inherited;
+end;
+
+procedure TmnwResponse.DoPrepareHeader;
+begin
+  inherited;
+end;
+
+procedure TmnwResponse.DoWriteCookies;
+var
+  s: string;
+begin
+  if Session.Changed then //If Value = '' that mean we will delete it
+  begin
+    s := Session.GetText;
+    Stream.WriteUTF8Line('Set-Cookie: ' + s);
+  end;
+  inherited;
 end;
 
 initialization

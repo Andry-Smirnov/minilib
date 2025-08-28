@@ -18,7 +18,7 @@ unit mnServers;
 interface
 
 uses
-  Classes, SysUtils,
+  Classes, SysUtils, StrUtils,
   mnUtils, mnOpenSSL, syncobjs, mnClasses,
   mnSockets, mnStreams, mnConnections;
 
@@ -52,7 +52,7 @@ type
     CertPassword: string;
     CertificateFile: string;
     PrivateKeyFile: string;
-    constructor Create(const vAddress, vPort: string; vOptions: TmnsoOptions = [soNoDelay]);
+    constructor Create(const vAddress, vPort: string; vOptions: TmnsoOptions = []);
     destructor Destroy; override;
     property Port: string read FPort write SetPort;
     property Address: string read FAddress write SetAddress;
@@ -130,6 +130,7 @@ type
     procedure Disconnect;
     function Accept: TmnCustomSocket;
     procedure UpdateChanged;
+    procedure DropConnections; virtual;
   protected
     procedure PostLogs; //run in main thread by queue
     procedure PostChanged; //run in main thread by queue
@@ -140,12 +141,12 @@ type
     procedure Prepare; virtual;
     procedure Execute; override;
     procedure Unprepare; virtual;
-    procedure DropConnections; virtual;
     procedure TerminatedSet; override;
     property Event: TEvent read FEvent;
   public
     constructor Create;
     destructor Destroy; override;
+    function AcceptSocket(Socket: TmnCustomSocket): TmnServerConnection;
     procedure Add(Connection: TmnConnection); override;
     procedure Remove(Connection: TmnConnection); override;
     // Use this function when you are in a thread do not use Server.Log
@@ -170,14 +171,14 @@ type
   private
     FActive: Boolean;
     FPort: string;
-    FAddress: string;
+    FBind: string;
     FListener: TmnListener;
     FLogging: Boolean;
     FUseSSL: Boolean;
     FIdleTick: UInt64;
     FIdleInterval: Int64;
     procedure SetActive(const Value: Boolean);
-    procedure SetAddress(const Value: string);
+    procedure SetBind(const Value: string);
     procedure SetPort(const Value: string);
     function GetCount: Integer;
     function GetConnected: Boolean;
@@ -207,7 +208,7 @@ type
     CertificateFile: string;
     PrivateKeyFile: string;
 
-    constructor Create;
+    constructor Create; virtual;
     procedure BeforeDestruction; override;
     destructor Destroy; override;
     //Server.Log This called from outside of any threads, i mean you should be in the main thread to call it, if not use Listener.Log
@@ -224,12 +225,13 @@ type
     property Count: Integer read GetCount;
 
     property Port: string read FPort write SetPort;
-    property Address: string read FAddress write SetAddress;
+    property Bind: string read FBind write SetBind;
+    property Address: string read FBind write SetBind;//Deprecated
     property UseSSL: Boolean read FUseSSL write FUseSSL;
 
     property Active: boolean read FActive write SetActive default False;
     property Started: boolean read FActive write SetActive default False;
-    property Logging: Boolean read FLogging write FLogging default false;
+    property Logging: Boolean read FLogging write FLogging default False;
     property Connected: Boolean read GetConnected;
     property IdleInterval: Int64 read FIdleInterval write FIdleInterval default cIdleInterval;
   end;
@@ -263,7 +265,7 @@ type
     ExecuteProc: TmnServerExecuteProc;
     function DoCreateListener: TmnListener; override;
   public
-    constructor Create(AutoStart: Boolean; AAddress: string; APort: String; AReadTimeOut: Integer = -1);
+    constructor Create(AutoStart: Boolean; AAddress: string; APort: String; AReadTimeOut: Integer = -1); reintroduce;
     destructor Destroy; override;
   end;
 
@@ -447,7 +449,7 @@ end;
 procedure TmnServerConnection.Prepare;
 begin
   FStream.Prepare;
-  inherited Prepare;
+  inherited;
 end;
 
 procedure TmnServerConnection.TerminatedSet;
@@ -526,6 +528,27 @@ begin
 end;
 
 { TmnListener }
+
+function TmnListener.AcceptSocket(Socket: TmnCustomSocket): TmnServerConnection;
+begin
+  //check to make this in new thread
+  Result := nil;
+
+  if Socket=nil then
+    raise EmnStreamException.CreateFmt('socket is null', []);
+
+  try
+    Result := CreateConnection(Socket) as TmnServerConnection;
+    Result.FRemoteIP := Socket.GetRemoteAddress;
+    Result.FIsSSL := soSSL in Socket.Options;
+  except
+    on E: Exception do
+    begin
+      Log(E.Message);
+      Result := nil;
+    end;
+  end;
+end;
 
 procedure TmnListener.Add(Connection: TmnConnection);
 begin
@@ -628,6 +651,7 @@ end;
 
 destructor TmnListener.Destroy;
 begin
+  FreeAndNil(Context);
   FreeAndNil(FLogMessages);
   FreeAndNil(FEvent);
   inherited;
@@ -643,8 +667,8 @@ end;
 procedure TmnListener.Execute;
 var
   aSocket: TmnCustomSocket;
-  aConnection: TmnServerConnection;
   s: string;
+  aConnection: TmnServerConnection;
 begin
   inherited;
   try
@@ -704,20 +728,8 @@ begin
           end
           else
           begin
-            //check to make this in new thread
-            aConnection := nil;
-            try
-              aConnection := CreateConnection(aSocket) as TmnServerConnection;
-              aConnection.FRemoteIP := aSocket.GetRemoteAddress;
-              aConnection.FIsSSL := soSSL in aSocket.Options;
-            except
-              on E: Exception do
-              begin
-                Log(E.Message);
-                aConnection := nil;
-              end;
-            end;
-            if aConnection <> nil then
+            aConnection := AcceptSocket(aSocket);
+            if aConnection<>nil then
               aConnection.Start;
           end;
           {w.Stop;
@@ -732,7 +744,7 @@ begin
     DropConnections;
     Enter;
     try
-      Disconnect;
+      Disconnect; //It is alrady disconnected, but want to sure
     finally
       Leave;
     end;
@@ -760,7 +772,6 @@ const
   sChangeInterval = 10 * 6000; //60s
 var
   aDate: TDateTime;
-
 begin
   if (GetTickCount64-FLastCheck)>sChangeInterval then
   begin
@@ -813,16 +824,14 @@ begin
   if soSSL in Options then
   begin
     FileAge(CertificateFile, CertificateFileDate, True);
-    if SameText(ExtractFileExt(CertificateFile), '.pfx') then
+    if StartsText('system:', CertificateFile) then
     begin
-      Context.LoadPFXFile(UTF8Encode(CertificateFile), CertPassword);
+      Context.LoadSysStore(SubStr(CertificateFile, ':', 1));
     end
+    else if StartsText('pfx:', CertificateFile)  or SameText(ExtractFileExt(CertificateFile), '.pfx') then
+      Context.LoadPFXFile(UTF8Encode(CertificateFile), CertPassword)
     else
-    begin
-      Context.LoadFullChainFile(UTF8Encode(CertificateFile));
-      Context.LoadPrivateKeyFile(UTF8Encode(PrivateKeyFile));
-    end;
-    Context.CheckPrivateKey; //do not use this
+      Context.LoadFullChainFile(UTF8Encode(CertificateFile), UTF8Encode(PrivateKeyFile));
     //Context.SetVerifyNone;
   end;
 end;
@@ -843,7 +852,7 @@ begin
   try
     for i := 0 to List.Count - 1 do
     begin
-      List[i].FreeOnTerminate := False; //I will kill you
+      List[i].FreeOnTerminate := False; //I will kill you :D
     end;
   finally
     Leave;
@@ -895,7 +904,7 @@ end;
 constructor TmnServer.Create;
 begin
   inherited Create;
-  FAddress := '0.0.0.0';
+  FBind := '0.0.0.0';
   //FAddress := '';
   CertificateFile := 'certificate.pem';
   PrivateKeyFile := 'privatekey.pem';
@@ -949,7 +958,7 @@ begin
       try
         FListener.FServer := Self;
         FListener.FPort := FPort;
-        FListener.FAddress := FAddress;
+        FListener.FAddress := FBind;
         if UseSSL then
           FListener.FOptions := FListener.FOptions + [soSSL, soWaitBeforeRead];
         FListener.CertificateFile := CertificateFile;
@@ -1038,11 +1047,11 @@ procedure TmnServer.DoLog(const S: string);
 begin
 end;
 
-procedure TmnServer.SetAddress(const Value: string);
+procedure TmnServer.SetBind(const Value: string);
 begin
   if Active then
     raise EmnException.Create('Can not change Address value when active');
-  FAddress := Value;
+  FBind := Value;
 end;
 
 procedure TmnServer.SetPort(const Value: string);
@@ -1129,9 +1138,7 @@ begin
   if soSSL in Options then
   begin
     FContext := TContext.Create(TTLS_SSLServerMethod, [coServer, coNoCompressing]);
-    FContext.LoadFullChainFile(CertificateFile);
-    FContext.LoadPrivateKeyFile(PrivateKeyFile);
-    FContext.CheckPrivateKey; //do not use this
+    FContext.LoadFullChainFile(CertificateFile, PrivateKeyFile);
     //Context.SetVerifyNone;
   end;
 

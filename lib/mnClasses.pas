@@ -50,9 +50,8 @@ type
   protected
     FRefCount: Integer;
 
-    function QueryInterface(const IID: TGUID; out Obj): HResult; stdcall;
-    function _AddRef: Integer; stdcall;
-    function _Release: Integer; stdcall;
+    function _AddRef: Integer; {$ifdef MSWINDOWS}stdcall{$else}cdecl{$endif};
+    function _Release: Integer; {$ifdef MSWINDOWS}stdcall{$else}cdecl{$endif};
   public
     procedure AfterConstruction; override;
     procedure BeforeDestruction; override;
@@ -69,8 +68,8 @@ type
   TmnObjectList<_Object_: class> = class(TObjectList<_Object_>)
   {$endif}
   private
-    function GetItem(Index: Integer): _Object_;
-    procedure SetItem(Index: Integer; AObject: _Object_);
+    function GetItem(Index: NativeInt): _Object_;
+    procedure SetItem(Index: NativeInt; AObject: _Object_);
   protected
     type
 
@@ -99,11 +98,10 @@ type
     {$H-}procedure Removing(Item: _Object_); virtual;{$H+}
     {$H-}procedure Added(Item: _Object_); virtual;{$H+}
 
-
     //* Belal: If both Left and Right is eaual the orignal sort swap it, we do not want to swapt it
     //* Thanks to Belal
     function Compare(Left, Right: _Object_): Integer; virtual;
-    procedure QuickSortItems(iLo, iHi: Integer);
+    procedure QuickSortItems(iLo, iHi: NativeInt);
 
     procedure Created; virtual;
     function RequireItem: _Object_; virtual;
@@ -112,9 +110,9 @@ type
     function QueryInterface({$ifdef FPC}constref{$else}const{$endif} iid : TGuid; out Obj):HResult; {$ifdef WINDOWS}stdcall{$else}cdecl{$endif};
     procedure AfterConstruction; override;
     function Add(Item: _Object_): Integer;
-    procedure Insert(Index: Integer; Item: _Object_);
+    procedure Insert(Index: NativeInt; Item: _Object_);
     function Extract(Item: _Object_): _Object_;
-    function IndexOfObject(Item: TObject): Integer;
+    function IndexOfObject(Item: TObject): NativeInt;
     {$ifdef FPC} //not now
     function Require(Index: Integer): _Object_;
     {$endif}
@@ -122,9 +120,9 @@ type
 
     procedure QuickSort; virtual;
 
-    property Items[Index: Integer]: _Object_ read GetItem write SetItem; default;
     function Last: _Object_;
     function First: _Object_;
+    property Items[Index: NativeInt]: _Object_ read GetItem write SetItem; default;
     //procedure Clear; {$ifdef FPC} override; {$else} virtual; {TODO talk with belal} {$endif}
   end;
 
@@ -172,11 +170,13 @@ type
     TmnNameValueObject = class(TmnNamedObject)
     private
       FValue: string;
+    protected
+      procedure SetValue(const AValue: string); virtual;
     public
       procedure Assign(FromObject: TObject); virtual;
       constructor Create(const vName: string; const AValue: string = ''); virtual; //must be virtual for generic function
       constructor CreateFrom(FromObject: TmnNameValueObject);
-      property Value: string read FValue write FValue;
+      property Value: string read FValue write SetValue;
     end;
 
     //USAGE: TMyNameValueObjectList = class(TmnNameValueObjectList<TMyNameValueObject>)
@@ -214,12 +214,12 @@ type
 
 implementation
 
-function TmnObjectList<_Object_>.GetItem(Index: Integer): _Object_;
+function TmnObjectList<_Object_>.GetItem(Index: NativeInt): _Object_;
 begin
   Result := _Object_(inherited Items[Index]);
 end;
 
-procedure TmnObjectList<_Object_>.SetItem(Index: Integer; AObject: _Object_);
+procedure TmnObjectList<_Object_>.SetItem(Index: NativeInt; AObject: _Object_);
 begin
   inherited Items[Index] := AObject;
 end;
@@ -311,7 +311,7 @@ begin
   Result := inherited Add(Item);
 end;
 
-function TmnObjectList<_Object_>.IndexOfObject(Item: TObject): Integer;
+function TmnObjectList<_Object_>.IndexOfObject(Item: TObject): NativeInt;
 begin
   if Item is TClass(_Object_) then
     Result := IndexOf(_Object_(Item))
@@ -319,7 +319,7 @@ begin
     Result := -1;
 end;
 
-procedure TmnObjectList<_Object_>.Insert(Index: Integer; Item: _Object_);
+procedure TmnObjectList<_Object_>.Insert(Index: NativeInt; Item: _Object_);
 begin
   inherited Insert(Index, Item);
 end;
@@ -343,9 +343,9 @@ begin
     QuickSortItems(0, Count - 1);
 end;
 
-procedure TmnObjectList<_Object_>.QuickSortItems(iLo, iHi: Integer);
+procedure TmnObjectList<_Object_>.QuickSortItems(iLo, iHi: NativeInt);
 var
-  Lo, Hi, Md: integer;
+  Lo, Hi, Md: NativeInt;
   p: _Object_;
 begin
   Lo := iLo;
@@ -379,7 +379,9 @@ end;
 
 function TmnObjectList<_Object_>.Compare(Left, Right: _Object_): Integer;
 begin
+  {$ifdef FPC} // just for hints
   Result := 0;
+  {$endif}
   raise ENotImplemented.Create(ClassName + '.Compare');
 end;
 
@@ -587,11 +589,16 @@ end;
 
 procedure TmnObject.AfterConstruction;
 begin
-  inherited AfterConstruction;
+  inherited;
   Created;
 end;
 
 { TmnNameValueObject }
+
+procedure TmnNameValueObject.SetValue(const AValue: string);
+begin
+  FValue := AValue;
+end;
 
 procedure TmnNameValueObject.Assign(FromObject: TObject);
 begin
@@ -604,7 +611,8 @@ begin
     raise Exception.Create('Invalide assign class')
 end;
 
-constructor TmnNameValueObject.Create(const vName, AValue: string);
+constructor TmnNameValueObject.Create(const vName: string; const AValue: string
+  );
 begin
   inherited Create;
   Name := vName;
@@ -680,14 +688,6 @@ begin
   end;
 end;
 
-function TmnRefInterfacedPersistent.QueryInterface(const IID: TGUID; out Obj): HResult;
-begin
-  if GetInterface(IID, Obj) then
-    Result := S_OK
-  else
-    Result := E_NOINTERFACE;
-end;
-
 function TmnRefInterfacedPersistent._AddRef: Integer;
 begin
   Result := AtomicIncrement(FRefCount);
@@ -715,5 +715,3 @@ begin
 end;
 
 end.
-
-

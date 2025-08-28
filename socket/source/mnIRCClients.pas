@@ -1810,7 +1810,7 @@ function TmnIRCConnection.CreateStream: TIRCSocketStream;
 var
   Options: TmnsoOptions;
 begin
-  Options := [soNoDelay]; //To send messages immediately
+  Options := []; //To send messages immediately
   if Client.UseSSL then
     Options := Options + [soSSL, soWaitBeforeRead]; //soWaitBeforeRead to fix
 
@@ -1872,7 +1872,7 @@ begin
     try
       SendRaws;
       if FStream.Connected then
-        FStream.ReadLineUTF8(S, True);
+        FStream.ReadUTF8Line(S, True);
       {$ifdef FPC}
       aLine := Trim(S);
       {$else}
@@ -1897,7 +1897,7 @@ begin
 
         if Active and FStream.Connected and not Terminated then
         begin
-          FStream.ReadLineUTF8(S, True);
+          FStream.ReadUTF8Line(S, True);
           {$ifdef FPC}
           aLine := Trim(S);
           {$else}
@@ -2066,7 +2066,7 @@ procedure TmnIRCConnection.SendRaw(S: string);
 begin
   if StreamConnected then
   begin
-    FStream.WriteLineUTF8(S);
+    FStream.WriteUTF8Line(S);
     Log('>'+S); //it is in main thread
   end;
 end;

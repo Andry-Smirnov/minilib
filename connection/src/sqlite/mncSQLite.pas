@@ -11,6 +11,8 @@ unit mncSQLite;
 {$H+}
 {$IFDEF FPC}
 {$mode delphi}
+{$codepage UTF8}
+{$else}
 {$ENDIF}
 
 interface
@@ -388,7 +390,7 @@ begin
     s := 'sqlite: ' + sqlite3_errmsg(FDBHandle);
     if ExtraMsg <> '' then
       s := s + ' - ' + ExtraMsg;
-    raise EmncException.Create(s) {$ifdef fpc} at get_caller_frame(get_frame) {$endif};
+    raise EmncException.Create(s) {$ifdef fpc} at get_caller_frame(get_frame){$else} {$endif};
   end;
 end;
 
@@ -674,7 +676,7 @@ begin
         s := s + ' - ' + ExtraMsg;
       FStatment := nil;
     end;
-    raise EmncException.Create(s) {$ifdef fpc} at get_caller_frame(get_frame) {$endif};
+    raise EmncException.Create(s) {$ifdef fpc} at get_caller_frame(get_frame){$else}at ReturnAddress{$endif};
   end;
 end;
 

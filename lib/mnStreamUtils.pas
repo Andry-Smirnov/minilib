@@ -84,6 +84,8 @@ type
     procedure CloseRead; override;
     function DoRead(var Buffer; Count: Longint; out ResultCount, RealCount: Longint): Boolean; override;
     function DoWrite(const Buffer; Count: Longint; out ResultCount, RealCount: Longint): Boolean; override;
+    procedure CloseFragment; override;
+
   public
     constructor Create(ACompress: TmnStreamCompress; Level: TmnCompressLevel = 9); override;
     destructor Destroy; override;
@@ -196,7 +198,7 @@ type
 
   TWebsocketPayload = record
   private
-    FSize: Int64;
+    //FSize: Int64;
     FMask: TWSMask;
     function GetSize: Int64;
     procedure SetSize(const Value: Int64);
@@ -234,7 +236,11 @@ function ZDecompressCheck(code: Integer): Integer; overload;
 begin
   Result := code;
   if code < 0 then
+  {$ifdef FPC}
+    raise Exception.Create('Error:' + Code.ToString) at get_caller_addr(get_frame);
+  {$else}
     raise EZDecompressionError.Create(string(_z_errmsg[2 - code])) at ReturnAddress;
+  {$endif}
 end;
 
 function gzipDecompressStream(inStream, outStream: TStream; Count: Int64): Int64;
@@ -357,8 +363,9 @@ function TmnDeflateStreamProxy.DoRead(var Buffer; Count: Longint; out ResultCoun
 var
   err: Smallint;
   HaveRead: Longint;
-  aSize: Longint;
+  aSize: Cardinal;
 begin
+  ResultCount := 0;
   if cprsRead in FCompress then
   begin
     //Example https://jigsaw.w3.org/HTTP/ChunkedScript
@@ -378,22 +385,26 @@ begin
           if Limit<>0 then
           begin
             aSize := FLimit-FLimitRead;
-            if aSize<=0 then Break;
+            //if aSize<=0 then Break;
             if aSize>BufSize then
               aSize := BufSize;
           end
           else
             aSize := BufSize;
 
-          Over.Read(ZBuffer^, aSize, HaveRead, RealCount); //BufSize or count ???
-          ZStream.next_in := Pointer(ZBuffer);
-          ZStream.avail_in := HaveRead;
-          if HaveRead=0 then //timeout or disconnected
-            break;
-
-          if Limit<>0 then
+          if aSize<>0 then
           begin
-            Inc(FLimitRead, HaveRead);
+
+            Over.Read(ZBuffer^, aSize, HaveRead, RealCount); //BufSize or count ???
+            ZStream.next_in := Pointer(ZBuffer);
+            ZStream.avail_in := HaveRead;
+            if HaveRead=0 then //timeout or disconnected
+              break;
+
+            if Limit<>0 then
+            begin
+              Inc(FLimitRead, HaveRead);
+            end;
           end;
         end
         else
@@ -415,10 +426,15 @@ begin
       end;
       ResultCount := Count - Integer(ZStream.avail_out);
 
-      if FLimit<>0 then
+      if (FLimit<>0) and (ZStream.avail_in=0) then
       begin
         if FLimitRead>=FLimit then
+        begin
+          ZEnd := True;
           CloseFragment;
+          FLimitRead := 0;
+          FLimit := 0;
+        end;
       end;
 
     end;
@@ -477,6 +493,12 @@ begin
   end;
 end;
 
+procedure TmnDeflateStreamProxy.CloseFragment;
+begin
+  inherited;
+
+end;
+
 procedure TmnDeflateStreamProxy.CloseInflate;
 begin
   if cprsRead in FCompress then
@@ -529,6 +551,7 @@ begin
 
       ZStream.next_in := Pointer(ZBuffer);
       ZStream.avail_in := 0;
+      FLimitRead := 0;
 
       if FGZip then
         WindowBits := MAX_WBITS + 16
@@ -545,7 +568,8 @@ end;
 constructor TmnDeflateStreamProxy.Create(ACompress: TmnStreamCompress; Level: TmnCompressLevel);
 begin
   inherited Create(ACompress, Level);
-  FBufSize := 16384;
+  //FBufSize := 16384;
+  FBufSize := 4096;
   FLevel := Level;
   FCompress := ACompress;
   FGZip := False;
@@ -811,7 +835,7 @@ end;
 
 function TWebsocketPayloadHeader.GetInteralSize: Byte;
 begin
-  Result := Byte((Byte2 and not $80));
+  Result := Byte((Byte2 and (not $80)));
 end;
 
 procedure TWebsocketPayloadHeader.SetInteralSize(const Value: Byte);
