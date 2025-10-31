@@ -72,6 +72,10 @@ type
     ID: Int64;
     Locked: Boolean;
     Data: TJSONObject;
+    procedure Step(var vPos: Int64); overload;
+    procedure Step(var vPos: Integer); overload;
+    function Step(var vPos: Int64; vMax: Int64): Boolean; overload;
+    function Step(var vPos: Integer; vMax: Integer): Boolean; overload;
 
     procedure Reset; //call in new fetch
     procedure Clear; //call in start loop
@@ -216,6 +220,7 @@ type
     FData: Integer;
     FTitle: string;
     FFormat: string;
+    FGuid: string;
     //FDesignerCell: TmnrDesignCell;
     function GetReport: TmnrCustomReport;
     function GetTag: Integer;
@@ -254,6 +259,7 @@ type
     property Title: string read FTitle write FTitle;
     property Format: string read FFormat write FFormat;
     property Data: Integer read FData write FData;
+    property Guid: string read FGuid write FGuid;
     property Chain: string read FChain write FChain;
     property IncludeSections: TmnrSectionClassIDs read GetIncludeSections;
     property ExcludeSections: TmnrSectionClassIDs read GetExcludeSections;
@@ -274,7 +280,8 @@ type
   TmnrLayoutList = class(TmnObjectList<TmnrLayout>)
   public
     constructor Create;
-    function FindLayout(vNumber, vData: Integer): TmnrLayout;
+    function FindLayout(vNumber, vData: Integer): TmnrLayout; overload;
+    function FindLayout(vNumber: Integer; const vGuid: string): TmnrLayout; overload;
   end;
 
 
@@ -3737,6 +3744,15 @@ begin
   Result := nil;
 end;
 
+function TmnrLayoutList.FindLayout(vNumber: Integer; const vGuid: string): TmnrLayout;
+begin
+  for var itm in Self do
+    if (itm.Number=vNumber)and(itm.Guid=vGuid) then
+      Exit(itm);
+
+  Result := nil;
+end;
+
 { TmnrFetch }
 
 procedure TmnrFetch.Clear;
@@ -3751,6 +3767,42 @@ begin
   ID     := 0;
   Locked := False;
   Data   := nil;
+end;
+
+procedure TmnrFetch.Step(var vPos: Integer);
+begin
+  if FetchMode=fmFirst then
+    vPos := 0
+  else
+    Inc(vPos);
+end;
+
+procedure TmnrFetch.Step(var vPos: Int64);
+begin
+  if FetchMode=fmFirst then
+    vPos := 0
+  else
+    Inc(vPos);
+end;
+
+function TmnrFetch.Step(var vPos: Integer; vMax: Integer): Boolean;
+begin
+  Step(vPos);
+
+  Result := vPos<vMax;
+
+  if not Result then
+    AcceptMode := acmEof;
+end;
+
+function TmnrFetch.Step(var vPos: Int64; vMax: Int64): Boolean;
+begin
+  Step(vPos);
+
+  Result := vPos<vMax;
+
+  if not Result then
+    AcceptMode := acmEof;
 end;
 
 { TRowsData }
