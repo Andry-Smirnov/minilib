@@ -1,10 +1,10 @@
 unit mncPGHeader;
-{ postgresql 17.x }
+{ postgresql 18.x }
 {$IFDEF FPC}
 {$MODE delphi}
 {$PACKRECORDS C}
 {$ENDIF}
-
+{.$define pg18}
 {$M+}{$H+}
 
 //{$MINENUMSIZE 4} //same as {$Z4} All enum must be sized as Integer
@@ -16,9 +16,23 @@ unit mncPGHeader;
  * @license   modifiedLGPL (modified of http://www.gnu.org/licenses/lgpl.html)
  *            See the file COPYING.MLGPL, included in this distribution,
  * @author    Zaher Dirkey <zaher, zaherdirkey>
- * @author    Belal Hamed <belalhamed at gmail dot com>  
+ * @author    Belal Hamed <belalhamed at gmail dot com>
  *
  * src/interfaces/libpq/libpq-fe.h
+ *}
+
+{*-------------------------------------------------------------------------
+ *
+ * libpq-fe.h
+ *	  This file contains definitions for structures and
+ *	  externs for functions used by frontend postgres applications.
+ *
+ * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1994, Regents of the University of California
+ *
+ * src/interfaces/libpq/libpq-fe.h
+ *
+ *-------------------------------------------------------------------------
  *}
 
 interface
@@ -71,7 +85,6 @@ const
     #define LIBPQ_HAS_TRACE_FLAGS 1
   }
 
-
   {*
    * These symbols may be used in compile-time #ifdef tests for the availability
    * of v14-and-newer libpq features.
@@ -118,7 +131,7 @@ type
     {$else}
     ULONG_PTR = DWord;
     {$endif}
-  SIZE_T = ULONG_PTR;
+//  SIZE_T = ULONG_PTR;
   {$endif}
 
   PText = PByte;
@@ -151,7 +164,9 @@ type
   	CONNECTION_GSS_STARTUP,		{ Negotiating GSSAPI. }
   	CONNECTION_CHECK_TARGET,		{ * Internal state: checking target server properties. }
     CONNECTION_CHECK_STANDBY,	{ Checking if server is in standby mode. }
-  	CONNECTION_ALLOCATED		{ Waiting for connection attempt to be started. }
+  	CONNECTION_ALLOCATED,		{ Waiting for connection attempt to be started. }
+    CONNECTION_AUTHENTICATING 	{ Authentication is in progress with some
+    								 * external system. }
     );
 
   TPostgresPollingStatusType = (
@@ -223,6 +238,12 @@ type
   	PQ_PIPELINE_OFF,
   	PQ_PIPELINE_ON,
   	PQ_PIPELINE_ABORTED
+  );
+
+  TPGauthData = (
+  	PQAUTHDATA_PROMPT_OAUTH_DEVICE, { user must visit a device-authorization
+  									 * URL }
+  	PQAUTHDATA_OAUTH_BEARER_TOKEN	{ server requests an OAuth Bearer token }
   );
 
 {
@@ -530,11 +551,12 @@ type
   TPQtransactionStatus = function(conn: PPGconn): TPGTransactionStatusType; cdecl;
   TPQparameterStatus = function(conn: PPGconn; paramName: PByte): PByte; cdecl; //or maybe PPAnsiChar
   TPQprotocolVersion = function(conn: PPGconn): Integer; cdecl;
+  TPQfullProtocolVersion = function(conn: PPGconn): Integer; cdecl;
   TPQserverVersion = function(conn: PPGconn): Integer; cdecl;
   TPQerrorMessage = function(conn: PPGconn): PByte; cdecl;
   TPQsocket = function(conn: PPGconn): Integer; cdecl;
   TPQbackendPID = function(conn: PPGconn): Integer; cdecl;
-  TPGpipelineStatus = procedure(conn: PPGconn); cdecl;
+  TPQpipelineStatus = function(conn: PPGconn): TPGpipelineStatusMode; cdecl;
   TPQconnectionNeedsPassword = function(conn: PPGconn): Integer; cdecl;
   TPQconnectionUsedPassword = function(conn: PPGconn): Integer; cdecl;
   TPQconnectionUsedGSSAPI = function(conn: PPGconn): Integer; cdecl;
@@ -625,7 +647,7 @@ type
 
   { Routines for pipeline mode management }
 
-  TPQenterPipelineMode = function(conn: PPGconn): integer;
+  TPQenterPipelineMode = function(conn: PPGconn): Integer; cdecl;
   TPQexitPipelineMode = function(conn: PPGconn): Integer; cdecl;
   TPQpipelineSync = function(conn: PPGconn): Integer; cdecl;
   TPQsendFlushRequest = function(conn: PPGconn): Integer; cdecl;
@@ -656,7 +678,7 @@ type
   TPQpingParams = function(Keywords: Pointer; Values: Pointer; expand_dbname: Integer): TPGPing; cdecl;
 
   { Force the write buffer to be written (or at least try) }
-  TPQflush = function(conn: PPGconn): Integer;
+  TPQflush = function(conn: PPGconn): Integer; cdecl;
 
   {
    * "Fast path" interface --- not really recommended for application
@@ -722,8 +744,8 @@ type
   TPQescapeStringConn = function(conn: PPGconn; toStr: PByte; fromStr: PByte; length: size_t; var error: integer): size_t; cdecl; //TODO Check toStr
   TPQescapeLiteral = function(conn: PPGconn; str: PByte; len: size_t): PByte; cdecl;
   TPQescapeIdentifier = function(conn: PPGconn; str: PByte; len: size_t): PByte; cdecl;
-  TPQescapeByteaConn = function(conn: PPGconn; const from: PByte; from_length: longword; to_lenght: PLongword): PByte; cdecl;
-  TPQunescapeBytea = function(const from: PByte; to_lenght: PLongword): PByte; cdecl;
+  TPQescapeByteaConn = function(conn: PPGconn; const from: PByte; from_length: longword; to_length: PLongword): PByte; cdecl;
+  TPQunescapeBytea = function(const from: PByte; to_length: PLongword): PByte; cdecl;
 
   //TPQescapeBytea = function(const from: PByte; from_length: longword; to_lenght: PLongword): PByte; cdecl; deprecated;
 
@@ -791,9 +813,83 @@ type
   { Get encoding id from environment variable PGCLIENTENCODING }
   TPQenv2encoding = function(): Integer; cdecl;
 
+  TPGpromptOAuthDevice = record
+  	verification_uri: PText;	{ verification URI to visit }
+  	user_code: PText;		{ user code to enter }
+  	verification_uri_complete: PText;	{ optional combination of URI and
+  											 * code, or NULL }
+  	expires_in: integer;	{ seconds until user code expires }
+  end;
+
+  SOCKTYPE = Integer;               { Platform-specific socket type - adjust as needed }
+  PSOCKTYPE = ^SOCKTYPE;
+
+  { for PGoauthBearerRequest.async() }
+
+  PPGoauthBearerRequest = ^TPGoauthBearerRequest;
+  TPGoauthBearerRequest = record
+  type
+      TAsyncCallback = function(conn: TPGconn; request: PPGoauthBearerRequest; altsock: PSOCKTYPE): TPostgresPollingStatusType; cdecl;
+      TCleanupCallback = procedure(conn: TPGconn; request: PPGoauthBearerRequest); cdecl;
+  public
+ 	  { Hook inputs (constant across all calls) }
+  	openid_configuration: PText;	{ OIDC discovery URI }
+  	scope: PText;			{ required scope(s), or NULL }
+
+  	{ Hook outputs }
+
+  	{*---------
+  	 * Callback implementing a custom asynchronous OAuth flow.
+  	 *
+  	 * The callback may return
+  	 * - PGRES_POLLING_READING/WRITING, to indicate that a socket descriptor
+  	 *   has been stored in *altsock and libpq should wait until it is
+  	 *   readable or writable before calling back;
+  	 * - PGRES_POLLING_OK, to indicate that the flow is complete and
+  	 *   request->token has been set; or
+  	 * - PGRES_POLLING_FAILED, to indicate that token retrieval has failed.
+  	 *
+  	 * This callback is optional. If the token can be obtained without
+  	 * blocking during the original call to the PQAUTHDATA_OAUTH_BEARER_TOKEN
+  	 * hook, it may be returned directly, but one of request->async or
+  	 * request->token must be set by the hook.
+  	 *}
+    async: TAsyncCallback;
+
+  	{*
+  	 * Callback to clean up custom allocations. A hook implementation may use
+  	 * this to free request->token and any resources in request->user.
+  	 *
+  	 * This is technically optional, but highly recommended, because there is
+  	 * no other indication as to when it is safe to free the token.
+  	 *}
+  	cleanup: TCleanupCallback;
+
+  	{*
+  	 * The hook should set this to the Bearer token contents for the
+  	 * connection, once the flow is completed.  The token contents must remain
+  	 * available to libpq until the hook's cleanup callback is called.
+  	 *}
+  	token: PAnsiChar;
+
+  	{*
+  	 * Hook-defined data. libpq will not modify this pointer across calls to
+  	 * the async callback, so it can be used to keep track of
+  	 * application-specific state. Resources allocated here should be freed by
+  	 * the cleanup callback.
+  	 *}
+  	user: Pointer;
+  end;
+
   TPQencryptPassword = function(passwd: PByte; user: PByte): PByte; cdecl;
   TPQencryptPasswordConn = function(conn: PPGconn; passwd: PByte; user: PByte; algorithm: PByte): PByte; cdecl;
   TPQchangePassword = function(conn: PPGconn; user: PAnsiChar; passwd: PAnsiChar): PPGresult; cdecl;
+
+  TPQauthDataHook_type = function(auth_type: TPGauthData; conn: TPGconn; data: Pointer): Integer; cdecl;
+
+  TPQsetAuthDataHook = procedure(hook: TPQauthDataHook_type); cdecl;
+  TPQgetAuthDataHook = function: TPQauthDataHook_type; cdecl;
+  TPQdefaultAuthDataHook = function (auth_type: TPGauthData; conn: TPGconn; data: Pointer): Integer; cdecl;
 
   Tpg_char_to_encoding = function(name: PByte): Integer; cdecl;
   Tpg_encoding_to_char = function(encoding: Integer): PByte; cdecl;
@@ -852,11 +948,14 @@ var
   PQtransactionStatus: TPQtransactionStatus;
   PQparameterStatus: TPQparameterStatus;
   PQprotocolVersion: TPQprotocolVersion;
+  {$ifdef pg18}
+  PQfullProtocolVersion: TPQfullProtocolVersion;
+  {$endif}
   PQserverVersion: TPQserverVersion;
   PQerrorMessage: TPQerrorMessage;
   PQsocket: TPQsocket;
   PQbackendPID: TPQbackendPID;
-  PGpipelineStatus: TPGpipelineStatus;
+  PGpipelineStatus: TPQpipelineStatus;
   PQconnectionNeedsPassword: TPQconnectionNeedsPassword;
   PQconnectionUsedPassword: TPQconnectionUsedPassword;
   PQconnectionUsedGSSAPI: TPQconnectionUsedGSSAPI;
@@ -1017,6 +1116,10 @@ var
   PQencryptPasswordConn: TPQencryptPasswordConn;
   PQchangePassword: TPQchangePassword;
 
+  PQsetAuthDataHook: TPQsetAuthDataHook;
+  PQgetAuthDataHook: TPQgetAuthDataHook;
+  PQdefaultAuthDataHook: TPQdefaultAuthDataHook;
+
   pg_char_to_encoding: Tpg_char_to_encoding;
   pg_encoding_to_char: Tpg_encoding_to_char;
   pg_valid_server_encoding_id: Tpg_valid_server_encoding_id;
@@ -1092,6 +1195,9 @@ begin
   PQtransactionStatus := GetAddress('PQtransactionStatus');
   PQparameterStatus := GetAddress('PQparameterStatus');
   PQprotocolVersion := GetAddress('PQprotocolVersion');
+  {$ifdef pg18}
+  PQfullProtocolVersion := GetAddress('PQfullProtocolVersion');
+  {$endif}
   PQserverVersion := GetAddress('PQserverVersion');
 
   PQerrorMessage := GetAddress('PQerrorMessage');
@@ -1256,6 +1362,12 @@ begin
   PQencryptPasswordConn := GetAddress('PQencryptPasswordConn');
   PQchangePassword := GetAddress('PQchangePassword');
 
+  {$ifdef pg18}
+  PQsetAuthDataHook := GetAddress('PQsetAuthDataHook');
+  PQgetAuthDataHook := GetAddress('PQgetAuthDataHook');
+  PQdefaultAuthDataHook := GetAddress('PQdefaultAuthDataHook');
+  {$endif}
+
   pg_char_to_encoding := GetAddress('pg_char_to_encoding');
   pg_encoding_to_char := GetAddress('pg_encoding_to_char');
   pg_valid_server_encoding_id := GetAddress('pg_valid_server_encoding_id');
@@ -1271,4 +1383,3 @@ initialization
 finalization
   FreeAndNil(PGLib);
 end.
-

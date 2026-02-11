@@ -189,6 +189,7 @@ type
     function FindValue(AValue: String; AOptions: TConfOptions = []): TConfField; overload;
     function RequireField(const vName: string): TConfField; //find it if not exists create it
     function Add(AName, AValue: string): TConfField; overload;
+    function Replace(AName, AValue: string): TConfField; overload;
     function AddItem(S: string; Seperator: string; TrimIt: Boolean = False; MergeIt: Boolean = False): TConfField; overload;
     function AddComment(S: string): TConfField; overload;
     function Find(const vName: string): TConfField; virtual; //no exception
@@ -208,6 +209,11 @@ type
     function ReadSwitch(AName: string; Def: Boolean = False; AOptions: TConfOptions = sDefaultOptions): Boolean; overload;
     //Load it into strings without clear it
     procedure ReadStrings(AStrings: TStrings; ValuesOnly: Boolean = True; AllowDuplicate: Boolean = False); overload;
+
+    //Utils
+    function ReadPath(AName: string; RelativeTo: string; Def: String = ''; AOptions: TConfOptions = sDefaultOptions): String; overload;
+
+    //Do we need to clear AStrings?
     procedure ReadStrings(AStrings: TStrings; AName: string; ValuesOnly: Boolean = True; AllowDuplicate: Boolean = False); overload;
 
     procedure ReadSection(ToSection: TConfSection); overload;
@@ -268,20 +274,40 @@ type
     property Section; default;
   end;
 
-
-function ConnectStr(const S1, Sep: string; S2: string = ''): string;
+procedure MergeArguments(Section: TConfSection; KeyValues: TArray<string> = []); overload;
+procedure MergeArguments(Section: TConfSection; SectionName: string; KeyValues: TArray<string> = []); overload;
 
 implementation
 
 const
   cCommentChars: array of char = ['#', ';'];
 
-function ConnectStr(const S1, Sep: string; S2: string): string;
+procedure ConfigArgumentsCallbackProc(Sender: Pointer; Index: Integer; Name, Value: string; IsSwitch:Boolean; var Resume: Boolean);
 begin
-  Result := S1;
-  if (Result <> '') and (S2 <> '') then
-    Result := Result + Sep;
-  Result := Result + S2;
+  if Index > 0 then //ignore first param (exe file)
+    begin
+      if IsSwitch or ((Name <> '') and (Value <> '')) then
+        (TConfSection(Sender) as TConfSection).Replace(Name, Value)
+      else
+        (TConfSection(Sender) as TConfSection).Replace('', Name);
+    end;
+end;
+
+procedure MergeArguments(Section: TConfSection; KeyValues: TArray<string> = []);
+begin
+  ParseCommandArguments(@ConfigArgumentsCallbackProc, Section, KeyValues);
+end;
+
+procedure MergeArguments(Section: TConfSection; SectionName: string; KeyValues: TArray<string> = []); overload;
+var
+  aSection: TConfSection;
+begin
+  aSection := Section.Section[SectionName];
+  if aSection = nil then
+    aSection := Section.Sections.Require(SectionName);
+{  if aSection = nil then
+    raise Exception.Create('No section found' + SectioName);}
+  MergeArguments(aSection, KeyValues);
 end;
 
 { TConfWriter }
@@ -766,7 +792,11 @@ var
   Field: TConfField;
 begin
   if Self = nil then
-    raise Exception.Create('Section is nil, you can read from it');
+  begin
+    Result := Def;
+    exit;
+    //raise Exception.Create('Section is nil, you can read from it');
+  end;
   Field := FindField(AName, AOptions);
   if Field <> nil then
     Result := StrToIntDef(Field.Value, Def)
@@ -774,12 +804,25 @@ begin
     Result := Def;
 end;
 
+function TConfSection.ReadPath(AName, RelativeTo, Def: String; AOptions: TConfOptions): String;
+begin
+  Result := Self.ReadString(AName, Def, AOptions + [coInherite, coEmptyIsValue]);
+  if (Result = '.') then
+    Result := RelativeTo
+  else if (LeftStr(Result, 2) = '.\') or (LeftStr(Result, 2) = './') then
+    Result := RelativeTo + Copy(Result, 3, MaxInt);
+end;
+
 function TConfSection.ReadInt64(AName: string; Def: Int64; AOptions: TConfOptions): Int64;
 var
   Field: TConfField;
 begin
   if Self = nil then
-    raise Exception.Create('Section is nil, you can read from it');
+  begin
+    Result := Def;
+    exit;
+    //raise Exception.Create('Section is nil, you can read from it');
+  end;
   Field := FindField(AName, AOptions);
   if Field <> nil then
     Result := StrToInt64Def(Field.Value, Def)
@@ -792,7 +835,11 @@ var
   Field: TConfField;
 begin
   if Self = nil then
-    raise Exception.Create('Section is nil, you can read from it');
+  begin
+    Result := Def;
+    exit;
+    //raise Exception.Create('Section is nil, you can read from it');
+  end;
   Field := FindField(AName, AOptions);
   if (Field = nil) or ((Field.AsString = '') and (coEmptyIsValue in AOptions)) then //* nope, Empty value is a value
     Result := Def
@@ -806,7 +853,8 @@ var
   S: string;
 begin
   if Self = nil then
-    raise Exception.Create('Section is nil, you can read from it');
+    exit;
+    //raise Exception.Create('Section is nil, you can read from it');
 
   if ValuesOnly then
   begin
@@ -906,7 +954,11 @@ var
   Field: TConfField;
 begin
   if Self = nil then
-    raise Exception.Create('Section is nil, you can read from it');
+  begin
+    Result := Def;
+    exit;
+    //raise Exception.Create('Section is nil, you can read from it');
+  end;
   Field := FindField(AName, AOptions);
   if Field <> nil then
     Result :=  StrToBoolDef(Field.Value, Def)
@@ -919,7 +971,14 @@ var
   Field: TConfField;
 begin
   if Self = nil then
-    raise Exception.Create('Section is nil, you can read from it');
+  begin
+    if (coEmptyIsValue in AOptions) then
+      Result := False
+    else
+      Result := Def;
+    exit;
+    //raise Exception.Create('Section is nil, you can read from it');
+  end;
   Field := FindField(AName, AOptions);
   if (Field <> nil) then
   begin
@@ -969,7 +1028,7 @@ begin
     for i := 0 to Count-1 do
     begin
       if Items[i].Name = '' then
-        Result := ConnectStr(Result, Seperator, Items[i].Value)
+        Result := ConcatString(Result, Seperator, Items[i].Value)
     end;
 end;
 
@@ -1227,6 +1286,15 @@ begin
   Sections.Require(ASectionName).WriteString(AName, Value, DeleteIfEmpty, Overwrite);
 end;
 
+function TConfSection.Replace(AName, AValue: string): TConfField;
+begin
+  Result := FindField(AName, []);
+  if (Result = nil) then
+    Result := Add(AName, AValue)
+  else
+    Result.AsString := AValue;
+end;
+
 function TConfSection.ReplaceVariable(S: string): string;
 begin
   Result := S;//as it
@@ -1313,6 +1381,9 @@ var
     if vName = '' then
       raise Exception.Create('Can not add empty section!');
     SpliteParams(vName, aType, aParams);
+{    if SameText(ToSection.Name, vName) then //Maybe
+      aValueSection := ToSection
+    else}
     aValueSection := ToSection.Sections.Find(vName);
     if aValueSection = nil then
       aValueSection := ToSection.NewSection(vName, aType, aParams);

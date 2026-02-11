@@ -19,8 +19,8 @@ interface
 uses
   LCLIntf, SysUtils, Classes, Graphics, Controls, Forms, Dialogs, IniFiles,
   mnLogs, mnUtils, rtti,
-  StdCtrls, ExtCtrls, mnSockets, mnServers, mnWebModules, mnOpenSSL, mnBootstraps,
-  HomeModules, mnModules, mnWebElements,
+  StdCtrls, ExtCtrls, mnSockets, mnServers, mnOpenSSL, mnBootstraps,
+  mnModules, mnWebModules, mnWebElements, HomeModules,
   LResources, Buttons, Menus;
 
 type
@@ -28,12 +28,16 @@ type
   { TMain }
 
   TMain = class(TForm)
+    HomeAliasEdit: TEdit;
     ChallengeSSLChk: TCheckBox;
     KeepAliveChk: TCheckBox;
     Label5: TLabel;
+    HomeLbl: TLabel;
+    Label6: TLabel;
     MakeCertBtn: TButton;
-    AliasNameEdit: TEdit;
+    DocAliasEdit: TEdit;
     AutoRunChk: TCheckBox;
+    BindEdit: TEdit;
     UseSSLChk: TCheckBox;
     ExitBtn: TButton;
     Label1: TLabel;
@@ -78,8 +82,6 @@ type
     procedure Start;
     procedure UpdateStatus;
 
-    procedure ChallengeServerBeforeOpen(Sender: TObject);
-
     procedure HttpServerBeforeOpen(Sender: TObject);
     procedure HttpServerAfterOpen(Sender: TObject);
     procedure HttpServerAfterClose(Sender: TObject);
@@ -107,7 +109,8 @@ begin
     ServerLog('use https://localhost:' + PortEdit.Text + '/doc/')
   else
     ServerLog('use http://localhost:' + PortEdit.Text + '/doc/');
-  ChallengeServer.Enabled := ChallengeSSLChk.Checked;
+  ChallengeServer.Enabled := UseSSLChk.Checked and ChallengeSSLChk.Checked;
+
   WebServers.Start;
 end;
 
@@ -146,7 +149,7 @@ end;
 procedure TMain.StopBtnClick(Sender: TObject);
 begin
   WebServers.Stop;
-  StartBtn.Enabled:=true;
+  StartBtn.Enabled:= true;
   MaxOfThreadsLabel.Caption := '0';
   LastIDLabel.Caption := '0';
 end;
@@ -157,6 +160,11 @@ var
   aDocModule: TmodWebModule;
   aHomeModule: THomeModule;
 begin
+  aHomePath := IncludePathDelimiter(HomePathEdit.Text);
+  if (LeftStr(aHomePath, 2)='.\') or (LeftStr(aHomePath, 2) = './') then
+    aHomePath := IncludePathDelimiter(ExtractFilePath(Application.ExeName) + Copy(aHomePath, 3, MaxInt));
+
+  HttpServer.Bind := BindEdit.Text;
   HttpServer.Port := PortEdit.Text;
   if UseSSLChk.Checked then
   begin
@@ -169,27 +177,26 @@ begin
   end;
   //Server.Address := '127.0.0.1';
 
-  aHomePath := IncludePathDelimiter(HomePathEdit.Text);
-  if (LeftStr(aHomePath, 2)='.\') or (LeftStr(aHomePath, 2)='./') then
-    aHomePath := IncludePathDelimiter(ExtractFilePath(Application.ExeName) + Copy(aHomePath, 3, MaxInt));
-
-  aDocModule := HttpServer.Modules.Find<TmodWebModule>;
+  aDocModule := HttpServer.Modules.Find<TmodWebFileModule>;
   if aDocModule <> nil then
   begin
-    aDocModule.AliasName := AliasNameEdit.Text;
+    aDocModule.AliasName := DocAliasEdit.Text;
     aDocModule.HomePath := aHomePath;
+    (aDocModule as TmodWebFileModule).ServeFiles:= [serveEnabled, serveIndex, serveDefault, serveSmart];
     //aDocModule.Use.AcceptCompressing := True;
     if CompressChk.Checked then
       aDocModule.UseCompressing := ovUndefined
     else
       aDocModule.UseCompressing := ovNo;
     aDocModule.UseKeepAlive.AsBoolean := KeepAliveChk.Checked;
+    //HttpServer.SetFallbackRedirect('/'+aDocModule.AliasName+'/');
+    HttpServer.SetNotfound;
   end;
 
   aHomeModule := HttpServer.Modules.Find<THomeModule>;
   if aHomeModule <> nil then
   begin
-    aHomeModule.AliasName := 'home';
+    aHomeModule.AliasName := HomeAliasEdit.Text;
     aAppPath := ExtractFilePath(Application.ExeName);
 
     //aHomeModule.IsSSL := HttpServer.UseSSL;
@@ -273,18 +280,19 @@ var
     else
       Result := aIni.ReadString('options',AName, ADefault);
   end;
-
+var
+  aBounds: TRect;
 begin
   WebServers := TWebServers.Create;
   InstallEventLog(ServerLog);
 
   ChallengeServer := TmodWebServer.Create;
-  ChallengeServer.AddChallengeAcme(ExtractFilePath(ParamStr(0))+'acme\.well-known\');
+  ChallengeServer.AddChallengeAcme(ExtractFilePath(ParamStr(0)) + 'acme\.well-known\');
   ChallengeServer.AddRedirectHttps;
+  ChallengeServer.Bind:= BindEdit.Text;
 
   ChallengeServer.OnLog := ServerLog;
   ChallengeServer.Logging := LogMessages;
-  ChallengeServer.OnBeforeOpen := ChallengeServerBeforeOpen;
   WebServers.AddServer('ChallengeServer', ChallengeServer);
 
   HttpServer := TmodWebServer.Create;
@@ -297,13 +305,18 @@ begin
 
   WebServers.AddServer('HttpServer', HttpServer);
 
-  HttpServer.Modules.Add(THomeModule.Create('home', 'home', ['http/1.1']));
+  HttpServer.Modules.Add(TmodWebFileModule.Create('doc', 'doc'));
+  HttpServer.Modules.Add(THomeModule.Create('home', 'home'));
+  //HttpServer.SetFallbackRedirect('/doc/');
+  HttpServer.SetNotfound;
 
   aIni := TIniFile.Create(Application.Location + 'config.ini');
   try
     HomePathEdit.Text := GetOption('homepath', '.\html');
     PortEdit.Text := GetOption('port', '81');
-    AliasNameEdit.Text := GetOption('alias', 'doc');
+    DocAliasEdit.Text := GetOption('doc.alias', 'doc');
+    HomeAliasEdit.Text := GetOption('home.alias', 'home');
+    BindEdit.Text := GetOption('bind', '0.0.0.0');
     UseSSLChk.Checked := GetOption('ssl', false);
     CompressChk.Checked := GetOption('compress', false);
     KeepAliveChk.Checked := GetOption('keep-alive', false);
@@ -311,8 +324,13 @@ begin
     CertPassword := GetOption('cert_password', '');
     CertFile := CorrectPath(ExpandToPath(GetOption('certificate', './certificate.pem'), Application.Location));
     PrivateKeyFile := CorrectPath(ExpandToPath(GetOption('privatekey', './privatekey.pem'), Application.Location));
-    AutoRunChk.Checked := StrToBoolDef(GetSwitch('autorun', ''), False);
-    StayOnTopChk.Checked := StrToBoolDef(GetSwitch('ontop', ''), False);
+    aBounds.Left := aIni.ReadInteger('window', 'left', Left);
+    aBounds.Top := aIni.ReadInteger('window', 'top', Top);
+    aBounds.Width := aIni.ReadInteger('window', 'width', Width);
+    aBounds.Height := aIni.ReadInteger('window', 'height', Height);
+    BoundsRect := aBounds;
+    StayOnTopChk.Checked := aIni.ReadBool('window', 'ontop', StayOnTopChk.Checked);
+    AutoRunChk.Checked := aIni.ReadBool('window', 'autorun', AutoRunChk.Checked);
     LogMessages := GetOption('log');
   finally
     aIni.Free;
@@ -326,17 +344,24 @@ procedure TMain.FormDestroy(Sender: TObject);
 var
   aIni:TIniFile;
 begin
-  aIni := TIniFile.Create(Application.Location+'config.ini');
+  aIni := TIniFile.Create(Application.Location + 'config.ini');
   try
+    aIni.WriteInteger('window', 'top', Top);
+    aIni.WriteInteger('window', 'left', Left);
+    aIni.WriteInteger('window', 'width', Width);
+    aIni.WriteInteger('window', 'Height', Height);
+    aIni.WriteBool('window', 'ontop', StayOnTopChk.Checked);
+    aIni.WriteBool('window', 'autorun', AutoRunChk.Checked);
+
     aIni.WriteString('options', 'homepath', HomePathEdit.Text);
-    aIni.WriteString('options', 'alias', AliasNameEdit.Text);
+    aIni.WriteString('options', 'doc.alias', DocAliasEdit.Text);
+    aIni.WriteString('options', 'home.alias', HomeAliasEdit.Text);
+    aIni.WriteString('options', 'bind', BindEdit.Text);
     aIni.WriteString('options', 'port', PortEdit.Text);
     aIni.WriteBool('options', 'ssl', UseSSLChk.Checked);
     aIni.WriteBool('options', 'compress', CompressChk.Checked);
     aIni.WriteBool('options', 'keep-alive', KeepAliveChk.Checked);
     aIni.WriteBool('options', 'challenge', ChallengeSSLChk.Checked);
-    aIni.WriteBool('options', 'autorun', AutoRunChk.Checked);
-    aIni.WriteBool('options', 'ontop', StayOnTopChk.Checked);
   finally
     aIni.Free;
   end;
@@ -348,20 +373,6 @@ procedure TMain.UpdateStatus;
 begin
   NumberOfThreads.Caption := IntToStr(HttpServer.Listener.Count);
   LastIDLabel.Caption := IntToStr(HttpServer.Listener.LastID);
-end;
-
-procedure TMain.ChallengeServerBeforeOpen(Sender: TObject);
-var
-  aDocModule: TmodWebModule;
-begin
-  aDocModule := ChallengeServer.Modules.Find<TmodWebModule>;
-  if aDocModule <> nil then
-  begin
-    //.well-known/acme-challenge/
-    //aDocModule.AliasName := '.well-known';
-    aDocModule.HomePath := Application.Location + 'cert/.well-known/';
-    //* use certbot folder to "Application.Location + cert" because certbot will create folder .well-known
-  end;
 end;
 
 procedure TMain.HttpServerAfterClose(Sender: TObject);

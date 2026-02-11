@@ -26,7 +26,7 @@ type
     lglText, //Normal text always show it
     lglError,
     lglWarning,
-    {lgHint, }
+    lgHint,
     lglInfo, //Normal text but show it if installed logger allow it, it is by default
     lglDebug
   );
@@ -35,13 +35,15 @@ type
 
   ILog = interface(IInterface)
     ['{ADAAE11A-FEED-450C-818F-04915E7730AA}']
-    procedure LogWrite(LogLevel: TLogLevel; S: string);
+    procedure LogWrite(vLogLevel: TLogLevel; S: string);
   end;
 
   TLogDispatcherItem = class(TObject)
   public
     LogLevel: TLogLevel;
     LogObject: TInterfacedPersistent;
+    Enabled: Boolean;
+    constructor Create;
     destructor Destroy; override;
   end;
 
@@ -50,6 +52,7 @@ type
   TLogDispatcher = class(TObjectList)
   private
     FEnabled: Boolean;
+//    FForceLevel: TLogLevel;
   protected
   public
     constructor Create;
@@ -57,8 +60,8 @@ type
     function Install(ALogLevel: TLogLevel; AObject: TInterfacedPersistent): Integer;
     function Add(AObject: TLogDispatcherItem): Integer;
 
-    procedure Write(LogLevel: TLogLevel; const S: string); overload;
-    procedure WriteLn(LogLevel: TLogLevel; const S: string); overload;
+    procedure Write(vLogLevel: TLogLevel; const S: string); overload;
+    procedure WriteLn(vLogLevel: TLogLevel; const S: string); overload;
 
     procedure Write(const S: string); overload; inline;
     procedure WriteLn(const S: string); overload;
@@ -70,6 +73,7 @@ type
     procedure Write(const S: string; I: Integer); overload;
 
     property Enabled: Boolean read FEnabled write FEnabled;
+//    property ForceLevel: TLogLevel read FForceLevel write FForceLevel; //nop some logs like files set to debug
   end;
 
   { TFileLog }
@@ -79,7 +83,7 @@ type
     FFileName: string;
     procedure InternalWrite(const S: string);
     function OpenStream: TStream;
-    procedure LogWrite(LogLevel: TLogLevel; S: string);
+    procedure LogWrite(vLogLevel: TLogLevel; S: string);
   public
     constructor Create(const FileName: string);
     destructor Destroy; override;
@@ -92,7 +96,7 @@ type
   TEventLog = class(TInterfacedPersistent, ILog)
   private
     Event: TLogEvent;
-    procedure LogWrite(LogLevel: TLogLevel; S: string);
+    procedure LogWrite(vLogLevel: TLogLevel; S: string);
   public
     constructor Create(AEvent: TLogEvent);
   end;
@@ -101,7 +105,7 @@ type
 
   TConsoleLog = class(TInterfacedPersistent, ILog)
   private
-    procedure LogWrite(LogLevel: TLogLevel; S: string);
+    procedure LogWrite(vLogLevel: TLogLevel; S: string);
   public
   end;
 
@@ -109,19 +113,23 @@ type
 
   TDebugOutputLog = class(TInterfacedPersistent, ILog)
   private
-    procedure LogWrite(LogLevel: TLogLevel; S: string);
+    procedure LogWrite(vLogLevel: TLogLevel; S: string);
   public
   end;
 
+//No We can't uninstall it
 procedure InstallFileLog(FileName: string; LogLevel: TLogLevel = lglDebug);
+procedure InstallConsoleLog(vLogLevel: TLogLevel = lglDebug);
+procedure InstallDebugOutputLog(vLogLevel: TLogLevel = lglDebug);
 procedure InstallEventLog(AEvent: TLogEvent; LogLevel: TLogLevel = lglDebug);
-procedure UninstallEventLog(AEvent: TLogEvent; LogLevel: TLogLevel = lglDebug);
-procedure InstallConsoleLog(LogLevel: TLogLevel = lglDebug);
-procedure InstallDebugOutputLog(LogLevel: TLogLevel = lglDebug);
-function IsLogInstalled(LogClass: TClass): Boolean;
+//procedure UninstallEventLog(AEvent: TLogEvent; LogLevel: TLogLevel = lglDebug);
 {$ifdef FPC}
 procedure InstallExceptLog(WithIO: Boolean = False);
 {$endif}
+function IsLogInstalled(LogClass: TClass): Boolean;
+procedure ChangeLogLevel(LogClass: TClass; vLogLevel: TLogLevel); overload;
+procedure ChangeLogLevel(LogClass: TClass; vEnabled: Boolean); overload;
+
 
 function Log: TLogDispatcher;
 
@@ -129,15 +137,14 @@ implementation
 
 var
   FLog: TLogDispatcher = nil;
-  Lock: TCriticalSection = nil;
+  FShutdowning: Boolean = False;
 
 function Log: TLogDispatcher;
 begin
+  if FShutdowning then
+    exit(nil);
   if not Assigned(FLog) then
-  begin
-    Lock := TCriticalSection.Create;
     FLog := TLogDispatcher.Create;
-  end;
   Result := FLog;
 end;
 
@@ -151,7 +158,7 @@ begin
   Log.Install(LogLevel, TEventLog.Create(AEvent));
 end;
 
-procedure UninstallEventLog(AEvent: TLogEvent; LogLevel: TLogLevel);
+{procedure UninstallEventLog(AEvent: TLogEvent; LogLevel: TLogLevel);
 var
   i: Integer;
 begin
@@ -167,7 +174,7 @@ begin
     end;
   end;
   raise Exception.Create('There is no Event install for it');
-end;
+end;}
 
 function IsLogInstalled(LogClass: TClass): Boolean;
 var
@@ -183,15 +190,41 @@ begin
   Result := False;
 end;
 
-procedure InstallConsoleLog(LogLevel: TLogLevel);
+procedure ChangeLogLevel(LogClass: TClass; vLogLevel: TLogLevel);
+var
+  i: Integer;
 begin
-  if not IsLogInstalled(TConsoleLog) then
-    Log.Install(LogLevel, TConsoleLog.Create);
+  for i := 0 to log.Count -1 do
+  begin
+    if (Log[i] as TLogDispatcherItem).LogObject is LogClass then
+    begin
+      (Log[i] as TLogDispatcherItem).LogLevel := vLogLevel;
+    end;
+  end;
 end;
 
-procedure InstallDebugOutputLog(LogLevel: TLogLevel);
+procedure ChangeLogLevel(LogClass: TClass; vEnabled: Boolean); overload;
+var
+  i: Integer;
 begin
-  Log.Install(LogLevel, TDebugOutputLog.Create);
+  for i := 0 to log.Count -1 do
+  begin
+    if (Log[i] as TLogDispatcherItem).LogObject is LogClass then
+    begin
+      (Log[i] as TLogDispatcherItem).Enabled := vEnabled;
+    end;
+  end;
+end;
+
+procedure InstallConsoleLog(vLogLevel: TLogLevel);
+begin
+  if not IsLogInstalled(TConsoleLog) then
+    Log.Install(vLogLevel, TConsoleLog.Create);
+end;
+
+procedure InstallDebugOutputLog(vLogLevel: TLogLevel);
+begin
+  Log.Install(vLogLevel, TDebugOutputLog.Create);
 end;
 
 {$ifdef FPC}
@@ -243,7 +276,7 @@ end;
 
 { TEventLog }
 
-procedure TEventLog.LogWrite(LogLevel: TLogLevel; S: string);
+procedure TEventLog.LogWrite(vLogLevel: TLogLevel; S: string);
 begin
   if Assigned(Event) then
     Event(S);
@@ -257,7 +290,7 @@ end;
 
 { TConsoleLog }
 
-procedure TConsoleLog.LogWrite(LogLevel: TLogLevel; S: string);
+procedure TConsoleLog.LogWrite(vLogLevel: TLogLevel; S: string);
 begin
   if IsConsole then
   begin
@@ -267,7 +300,7 @@ end;
 
 { TDebugOutputLog }
 
-procedure TDebugOutputLog.LogWrite(LogLevel: TLogLevel; S: string);
+procedure TDebugOutputLog.LogWrite(vLogLevel: TLogLevel; S: string);
 begin
   {$ifdef MSWINDOWS}
     s := IntToStr(TThread.GetTickCount64) + ': ' +s;
@@ -317,25 +350,20 @@ begin
   Result := inherited Add(item);
 end;
 
-procedure TLogDispatcher.Write(LogLevel: TLogLevel; const S: string);
+procedure TLogDispatcher.Write(vLogLevel: TLogLevel; const S: string);
 var
   i: Integer;
   ALog: ILog;
   item: TLogDispatcherItem;
 begin
-  if not Enabled then
+  if FShutdowning or not Enabled then
     exit;
-  Lock.Enter;
-  try
-    for i := 0 to Count -1 do
-    begin
-      item := Items[i] as TLogDispatcherItem;
-      ALog := (item.LogObject as ILog);
-      if item.LogLevel >= LogLevel then
-        ALog.LogWrite(LogLevel, S);
-    end;
-  finally
-    Lock.Leave;
+  for i := 0 to Count -1 do
+  begin
+    item := Items[i] as TLogDispatcherItem;
+    ALog := (item.LogObject as ILog);
+    if item.Enabled and ((item.LogLevel >= vLogLevel) {or (item.LogLevel >= ForceLevel)}) then
+      ALog.LogWrite(vLogLevel, S);
   end;
 end;
 
@@ -369,9 +397,9 @@ begin
   Write(lglInfo, S);
 end;
 
-procedure TLogDispatcher.WriteLn(LogLevel: TLogLevel; const S: string);
+procedure TLogDispatcher.WriteLn(vLogLevel: TLogLevel; const S: string);
 begin
-  Write(LogLevel, s + #13#10);
+  Write(vLogLevel, s + #13#10);
 end;
 
 procedure TLogDispatcher.WriteLn(const S: string; const vArgs: array of const);
@@ -429,7 +457,7 @@ begin
   end;
 end;
 
-procedure TFileLog.LogWrite(LogLevel: TLogLevel; S: string);
+procedure TFileLog.LogWrite(vLogLevel: TLogLevel; S: string);
 var
   a: string;
 begin
@@ -440,6 +468,12 @@ end;
 
 { TLogDispatcherItem }
 
+constructor TLogDispatcherItem.Create;
+begin
+  inherited Create;
+  Enabled := True;
+end;
+
 destructor TLogDispatcherItem.Destroy;
 begin
   FreeAndNil(LogObject);
@@ -448,7 +482,7 @@ end;
 
 initialization
 finalization
+  FShutdowning := True;
   FreeAndNil(FLog);
-  FreeAndNil(Lock);
 end.
 

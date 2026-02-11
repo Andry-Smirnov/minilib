@@ -99,7 +99,7 @@ type
   private
   protected
     function CreateRenderer: TmnwRenderer; override;
-    procedure CreateItems; override;
+    procedure InitItems; override;
     procedure Start; override;
   public
     destructor Destroy; override;
@@ -324,7 +324,7 @@ begin
             Route := 'clock';
             OnCompose := procedure(Inner: TmnwElement; AResponse: TmnwResponse)
             begin
-              AResponse.Stamp:= TimeToStr(Now);
+              AResponse.Stamp := TimeToStr(Now);
               TParagraph.Create(Inner, TimeToStr(Now));
               {with TImage.Create(Inner) do
               begin
@@ -356,11 +356,11 @@ begin
   if Request.ConnectionType = ctWebSocket then
   begin
     //Request.Path := DeleteSubPath(Name, Request.Path);
-    while Respond.Stream.Connected do
+    while Response.Stream.Connected do
     begin
-      if Respond.Stream.ReadUTF8Line(s) then
+      if Response.Stream.ReadUTF8Line(s) then
       begin
-        Respond.Stream.WriteUTF8Line(s);
+        Response.Stream.WriteUTF8Line(s);
         log(s);
       end;
     end;
@@ -774,8 +774,14 @@ end;
 procedure TFilesSchema.DoCompose;
 begin
   inherited;
-  ServeFiles := [serveAllow, serveDefault, serveIndex];
+  ServeFiles := [serveEnabled, serveSmart, serveDefault, serveIndex];
   HomePath := IncludePathDelimiter(App.HomePath) + 'files';
+  with TFolder.Create(This) do
+  begin
+    ServeFiles := [serveEnabled, serveSmart, serveDefault, serveIndex];
+    Route := 'folder';
+    HomePath := ExpandFileName(App.HomePath + 'smilies');
+  end;
 end;
 
 { TWSShema }
@@ -804,10 +810,10 @@ begin
   inherited;
 end;
 
-procedure THomeModule.CreateItems;
+procedure THomeModule.InitItems;
 begin
   inherited;
-  WebApp.RegisterSchema('welcome', TWelcomeSchema);
+  WebApp.RegisterSchema('', TWelcomeSchema);
   WebApp.RegisterSchema('login', TLoginSchema);
   WebApp.RegisterSchema('demo', TDemoSchema);
   WebApp.RegisterSchema('simple', TSimpleSchema);

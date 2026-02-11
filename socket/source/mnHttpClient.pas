@@ -40,7 +40,7 @@ type
 
     FStream: TmnConnectionStream;
     function GetRequest: TwebRequest;
-    function GetRespond: TwebRespond;
+    function GetResponse: TwebResponse;
   protected
     function DoCreateStream(const vURL: UTF8String; out vProtocol, vHost, vPort, vParams: UTF8String): TmnConnectionStream; virtual; abstract;
 
@@ -56,7 +56,7 @@ type
     procedure SendHead;
 
     function CreateRequest(AStream: TmnConnectionStream): TmodRequest; override;
-    function CreateRespond: TmodRespond; override;
+    function CreateResponse: TmodResponse; override;
     procedure Created; override;
   public
     constructor Create;
@@ -104,7 +104,7 @@ type
     property Path: UTF8String read FPath write FPath;
     property Stream: TmnConnectionStream read FStream;
     property Request: TwebRequest read GetRequest;
-    property Respond: TwebRespond read GetRespond;
+    property Response: TwebResponse read GetResponse;
   end;
 
   { TmnCustomHttpStream }
@@ -334,7 +334,7 @@ end;
 
 procedure TmnCustomHttpClient.SendCommand(Command: string; vData: PByte; vCount: Cardinal);
 begin
-  Request.Head := Command + ' ' + Path + ' ' + sHTTPProtocol1;
+  Request.Head := Command + ' ' + Path + ' ' + sHTTPProtocol_101;
 
   if Request.Use.Compressing<>ovYes then
     Request.ContentLength := vCount;
@@ -380,7 +380,7 @@ end;
 procedure TmnCustomHttpClient.Clear;
 begin
   Request.Clear;
-  Respond.Clear;
+  Response.Clear;
 end;
 
 procedure TmnCustomHttpClient.Connect(const vURL: UTF8String);
@@ -402,7 +402,7 @@ begin
 
   //need set trigger
   //Request.SetStream(Result, True);
-  //Respond.SetStream(Result, False);
+  //Response.SetStream(Result, False);
 end;
 
 procedure TmnCustomHttpClient.FreeStream;
@@ -413,7 +413,6 @@ begin
   begin
     Request.ProtcolProxy := nil;
     Request.ChunkedProxy := nil;
-    Request.CompressProxy := nil;
   end;
 
   FreeAndNil(FStream); //stream will free proxies
@@ -423,7 +422,7 @@ constructor TmnCustomHttpClient.Create;
 begin
   inherited Create;
   FRequest := CreateRequest(nil);
-  FRespond := CreateRespond;
+  FResponse := CreateResponse;
 end;
 
 procedure TmnCustomHttpClient.Created;
@@ -437,9 +436,9 @@ begin
   Result.Use.AcceptCompressing := ovYes;
 end;
 
-function TmnCustomHttpClient.CreateRespond: TmodRespond;
+function TmnCustomHttpClient.CreateResponse: TmodResponse;
 begin
-  Result := TwebRespond.Create(Request);
+  Result := TwebResponse.Create(Request);
 end;
 
 destructor TmnCustomHttpClient.Destroy;
@@ -457,6 +456,7 @@ begin
   if SendAndReceive then
   begin
     SendGet;
+    //Stream.Disconnect;///////////////////
     if Stream.Connected then
       Receive;
   end;
@@ -533,19 +533,16 @@ end;
 
 function TmnCustomHttpClient.ReceiveStream(AStream: TStream): TFileSize;
 begin
-  Result := Respond.ReceiveStream(AStream);
+  Result := Response.ReceiveStream(AStream);
 end;
 
 function TmnCustomHttpClient.ReadStream(AStream: TStream): TFileSize;
 begin
-  if (Request.ChunkedProxy<>nil) and (Respond.ContentLength = 0) then
+  if (Request.ChunkedProxy<>nil) and (Response.ContentLength = 0) then
     Result := FStream.ReadStream(AStream, -1)
-  else if (Respond.ContentLength > 0) and Respond.KeepAlive then //Respond.KeepAlive because we cant use compressed with keeplive or contentlength >0
+  else if (Response.ContentLength > 0) and Response.KeepAlive then //Response.KeepAlive because we cant use compressed with keeplive or contentlength >0
   begin
-    if (Request.CompressProxy<>nil) and (Request.CompressProxy.Limit <> 0) then
-      Result := FStream.ReadStream(AStream, -1)
-    else
-      Result := FStream.ReadStream(AStream, Respond.ContentLength);
+    Result := FStream.ReadStream(AStream, Response.ContentLength);
   end
   else
     Result := FStream.ReadStream(AStream, -1); //read complete stream
@@ -553,7 +550,7 @@ end;
 
 procedure TmnCustomHttpClient.Receive;
 begin
-  Respond.ReceiveHeader(True);
+  Response.ReceiveHeader(True);
 end;
 
 procedure TmnCustomHttpClient.ReceiveMemoryStream(AStream: TStream);
@@ -633,7 +630,7 @@ begin
   try
     SendHead;
     Receive;
-    aSizeStr := Respond.Header['Content-Length'];
+    aSizeStr := Response.Header['Content-Length'];
     FileSize := StrToInt64(aSizeStr);
   finally
     Disconnect;
@@ -651,9 +648,9 @@ begin
   Result := inherited Request as TwebRequest;
 end;
 
-function TmnCustomHttpClient.GetRespond: TwebRespond;
+function TmnCustomHttpClient.GetResponse: TwebResponse;
 begin
-  Result := inherited Respond as TwebRespond;
+  Result := inherited Response as TwebResponse;
 end;
 
 procedure TmnCustomHttpClient.SendFile(const vURL: UTF8String; AFileName: UTF8String);

@@ -28,9 +28,7 @@ uses
   mnTypes;
 
 procedure Nothing;
-{
-  StrHave: test the string if it have Separators
-}
+
 function QuoteStr(Str: string; const QuoteChar: string = '"'): string;
 
 {**
@@ -99,6 +97,7 @@ function GetSubValue(const Content, Name: string; out Value: string; Terminals: 
 
 
 //Parse ParamStr to Strings
+//Always use KeyValues with one - not --
 procedure ParseCommandArguments(CallBackProc: TArgumentsCallbackProc; Sender: Pointer; KeyValues: TArray<string> = []); overload;
 procedure ParseCommandArguments(Arguments: TStrings; KeyValues: TArray<string> = []); overload;
 
@@ -112,15 +111,15 @@ procedure ParseCommandArguments(Arguments: TStrings; KeyValues: TArray<string> =
 }
 
 //Command is not have value not a switch, it not started with - and not ended with : or =
-function GetArgumentCommand(Strings: TStrings; out CommandName: string; out Index: Integer): Boolean; overload;
-//SwitchName: Use switch char too, like `-demon`
+function GetArgumentCommand(Strings: TStrings; out CommandName: string; out Index: Integer): Boolean; overload; // not deprecated 'use GetArgumentSwitch with no Value';
+//SwitchName: Use switch char too, like `-demon` `-service`
 //Switch started with - or -- notice -- with considered as - too
-function GetArgumentSwitch(Strings: TStrings; SwitchName: string; AltSwitchName: string = ''): Boolean; overload;
+function GetArgumentSwitch(Strings: TStrings; SwitchName: string; AltSwitchName: string = ''; NoValue: Boolean = False): Boolean; overload;
 //Value from name or switch both acceptable, --name:value or name:value
 //Return True if name exists even if no value provided
 function GetArgumentValue(Strings: TStrings; out Value: String; SwitchName: string; AltSwitchName: string = ''): Boolean; overload;
 
-//Get Value from any thing have value by index `name1=value --name2=value`
+//Get Value from any thing have value by index `name1=value1 --name2=value2`
 function GetArgument(Strings: TStrings; out Value: String; Index: Integer): Boolean; overload;
 //Get all values
 function GetArgument(Strings: TStrings; OutStrings: TStrings; AltSwitch: string = ''): Boolean; overload;
@@ -140,7 +139,11 @@ function SubStr(const AText: String; AFromIndex, AToIndex: Integer): String; ove
 function SubStr(const Str: String; vSeperator: Char; vFromIndex, vToIndex: Integer): String; overload;
 function SubStr(const Str: String; vSeperator: Char; vIndex: Integer = 0): String; overload;
 
-function StrHave(S: string; Separators: TSysCharSet): Boolean; deprecated;
+{
+  StrHave: test the string if it have Separators
+}
+function HaveChar(S: string; Separators: TSysCharSet): Boolean;
+function IndexOfChar(S: string; Separators: TSysCharSet): Integer;
 
 //if S is same Name variabled passed, it empty it both, so i will use `var` not `out`
 procedure SpliteStr(S, Separator: string; var Name:string; var Value: string); inline;
@@ -243,9 +246,13 @@ function ExpandToPath(FileName: string; Path: string; Root: string = ''): string
 
 function CorrectPath(const Path: string): string;
 
-//TODO pascal
-//function EscapeStringPas(const S: string): string;
-//function DescapeStringPas(const S: string): string;
+//* Split at level depth of folders/directory, ignoring first \ or last one
+function SplitPath(Path: string; out Right: string; Index: Integer): string; overload;
+function SplitPath(Path: string; Index: Integer): string; overload;
+
+//Remove last subdirectory
+//if lasted by path delimiator remove it
+function TruncPath(const Path: string; Index: Integer): string; overload;
 
 function ExcludeTrailing(const Str: string; const TrailingChar: string = #0): string;
 
@@ -253,7 +260,9 @@ function ExcludeTrailing(const Str: string; const TrailingChar: string = #0): st
 function IncludePathDelimiter(const S: string; Force: Boolean = False): string;
 function ExcludePathDelimiter(Path: string): string;
 
+//This not check if S = ''
 function IncludeURLDelimiter(const S: string): string; //deprecated 'AddEndURLDelimiter';
+function IsURLDelimiter(const S: string): Boolean;
 
 //If empty do not add
 function AddStartURLDelimiter(const Path: string; Force: Boolean = False): string; {$ifdef D-}inline;{$endif}
@@ -362,7 +371,7 @@ procedure Nothing;
 begin
 end;
 
-function StrHave(S: string; Separators: TSysCharSet): Boolean;
+function HaveChar(S: string; Separators: TSysCharSet): Boolean;
 var
   i: Integer;
 begin
@@ -372,7 +381,22 @@ begin
      if CharInSet(S[i], Separators) then
      begin
        Result := True;
-       Break; 
+       Break;
+     end;
+  end;
+end;
+
+function IndexOfChar(S: string; Separators: TSysCharSet): Integer;
+var
+  i: Integer;
+begin
+  Result := 0;
+  for i := 1 to Length(S) do
+  begin
+     if CharInSet(S[i], Separators) then
+     begin
+       Result := i;
+       Break;
      end;
   end;
 end;
@@ -427,6 +451,56 @@ begin
     end
     else
       Result := Str;
+  end;
+end;
+
+function TruncPath(const Path: string; Index: Integer): string;
+var
+  l, i, e: Integer;
+  c: Char;
+begin
+  if Path = '' then
+    Result := ''
+  else if Index = 0 then
+    Result := Path
+  else
+  begin
+    i := 0;
+    l := Length(Path);
+    if Index > 0 then
+    begin
+      e := 1;
+      if Path[1] in ['\', '/'] then
+      begin
+        dec(l);
+        inc(e);
+      end;
+    end
+    else
+    begin
+      e := l;
+      if Path[l] in ['\', '/'] then
+      begin
+        dec(l);
+        dec(e);
+      end;
+    end;
+
+    while l > 0 do
+    begin
+      C := Path[e];
+      if C in ['\', '/'] then
+        Inc(i);
+      if (i = Abs(Index)) then
+        Break;
+
+      if Index > 0 then
+        Inc(e)
+      else
+        Dec(e);
+      Dec(l);
+    end;
+    Result := Copy(Path, 1, e);
   end;
 end;
 
@@ -1142,8 +1216,8 @@ begin
         NextIsValue := True
       else
       begin
-        idx := Pos('=', Name);
-        if idx<>0 then
+        idx := IndexOfChar(Name, ['=', ':']);
+        if idx > 0 then
         begin
           Value := Copy(Name, idx+1, MaxInt);
           Name := Copy(Name, 1, idx-1);
@@ -1178,7 +1252,7 @@ begin
   for I := 0 to Strings.Count - 1 do
   begin
     S := Strings[I];
-    if not StartsText('-', S) and not EndsText('=', S) and not EndsText(':', S) then
+    if not StartsText('-', S) and not HaveChar(S, ['=', ':']) then
     begin
       CommandName := S;
       Index := I;
@@ -1208,7 +1282,7 @@ begin
   begin
     S := Strings[I];
     P := Pos(Strings.NameValueSeparator, S);
-    if (P <> 0) then
+    if (P > 0) then
     begin
       N := Copy(S, 1, P - 1);
       V := Copy(S, p + 1, MaxInt);
@@ -1227,10 +1301,10 @@ begin
   end;
 end;
 
-function GetArgumentSwitch(Strings: TStrings; SwitchName: string; AltSwitchName: string = ''): Boolean; overload;
+function GetArgumentSwitch(Strings: TStrings; SwitchName: string; AltSwitchName: string = ''; NoValue: Boolean = False): Boolean; overload;
 var
   I, P: Integer;
-  S: string;
+  S, V: string;
 begin
   Result := False;
   if StartsText('--', SwitchName) then
@@ -1241,12 +1315,20 @@ begin
   begin
     S := Strings[I];
     P := Pos(Strings.NameValueSeparator, S);
-    if (P <> 0) then
+    if (P > 0) then
+    begin
+      V := Copy(S, P + 1, MaxInt);
       S := Copy(S, 1, P - 1)
+    end
     else
+    begin
+      V := '';
       S := Copy(S, 1, MaxInt);
+    end;
 
-    if SameText(S, SwitchName) or ((AltSwitchName <> '') and (SameText(S, AltSwitchName))) then
+    if NoValue and (V <> '') then
+      Continue
+    else if SameText(S, SwitchName) or ((AltSwitchName <> '') and (SameText(S, AltSwitchName))) then
       Exit(True);
   end;
 end;
@@ -1262,7 +1344,7 @@ begin
   begin
     S := Strings[I];
     P := Pos(Strings.NameValueSeparator, S);
-    if (P <> 0) then
+    if (P > 0) then
     begin
       Name := Copy(S, 1, P - 1);
       if (Name = '') then
@@ -1298,7 +1380,7 @@ begin
   begin
     S := Strings[I];
     P := Pos(Strings.NameValueSeparator, S);
-    if (P <> 0) then
+    if (P > 0) then
     begin
       if (Copy(S, 1, P - 1) = '') then
       begin
@@ -1329,7 +1411,7 @@ begin
   begin
     S := Strings[I];
     P := Pos(Strings.NameValueSeparator, S);
-    if (P <> 0) then
+    if (P > 0) then
     begin
       if (Copy(S, 1, P - 1) = '') then
       begin
@@ -1343,14 +1425,14 @@ begin
   end;
 end;
 
-function EndsDelimiter(const vFileName: string): Boolean;
-begin
-  Result := EndsStr('/', vFileName) or EndsStr('\', vFileName);
-end;
-
 function StartsDelimiter(const vFileName: string): Boolean;
 begin
   Result := StartsStr('/', vFileName) or StartsStr('\', vFileName);
+end;
+
+function EndsDelimiter(const vFileName: string): Boolean;
+begin
+  Result := EndsStr('/', vFileName) or EndsStr('\', vFileName);
 end;
 
 function ExpandToPath(FileName: string; Path: string; Root: string): string;
@@ -1685,7 +1767,7 @@ var
   p: integer;
 begin
   p := Pos(Separator, S);
-  if P <> 0 then
+  if P > 0 then
   begin
     Name := Copy(s, 1, p - 1);
     Value := Copy(s, p + 1, MaxInt);
@@ -1833,6 +1915,70 @@ begin
   {$endif MSWINDOWS}
 end;
 
+function SplitPath(Path: string; out Right: string; Index: Integer): string; overload;
+var
+  l, i, e: Integer;
+  c: Char;
+begin
+  if Path = '' then
+  begin
+    Result := '';
+    Right := '';
+  end
+  else if Index = 0 then
+  begin
+    Result := Path;
+    Right := '';
+  end
+  else
+  begin
+    i := 0;
+    l := Length(Path);
+    if Index > 0 then
+    begin
+      e := 1;
+      if Path[1] in ['\', '/'] then
+      begin
+        dec(l);
+        inc(e);
+      end;
+    end
+    else
+    begin
+      e := l;
+      if Path[l] in ['\', '/'] then
+      begin
+        dec(l);
+        dec(e);
+      end;
+    end;
+
+    while l > 0 do
+    begin
+      C := Path[e];
+      if C in ['\', '/'] then
+        Inc(i);
+      if (i = Abs(Index)) then
+        Break;
+
+      if Index > 0 then
+        Inc(e)
+      else
+        Dec(e);
+      Dec(l);
+    end;
+    Result := Copy(Path, 1, e);
+    Right := Copy(Path, e + 1, MaxInt);
+  end;
+end;
+
+function SplitPath(Path: string; Index: Integer): string; overload;
+var
+  t: string;
+begin
+  Result := SplitPath(Path, t, Index);
+end;
+
 function ExpandFile(const Name: string): string;
 var
   aEndsDelimiter: Boolean;
@@ -1861,6 +2007,11 @@ begin
     Result := S + '/'
   else
     Result := S;
+end;
+
+function IsURLDelimiter(const S: string): Boolean;
+begin
+  Result := IsStrInArray(S, ['/', '\']);
 end;
 
 function ExcludePathDelimiter(Path: string): string;
