@@ -37,7 +37,7 @@ unit mnJSON;
 interface
 
 uses
-{$IFDEF windows}Windows, {$ENDIF}
+  {$IFDEF windows}Windows, {$ENDIF}
   Classes, SysUtils, StrUtils, DateUtils, Types, Character,
   mnUtils;
 
@@ -81,11 +81,15 @@ type
 
       TToken = (
         tkNone,
-        tkString,
+        tkDQString,
+        tkSQString,
         tkEscape,
         tkEscapeChar,
         tkNumber,
         tkIdentifire,
+        tkCommentOpen,
+        tkSLComment,
+        tkMLComment,
         tkReturn //End of line to escape #10
       );
 
@@ -112,12 +116,16 @@ type
       ColumnNumber: Int64;
 
       Token: TToken;
+
+      TokenString: TToken;
+      StartString: Integer;
       StringBuffer: UTF8String;
       EscapeBuffer: UTF8String;
-      StartString: Integer;
+
       Index: Integer;
       Options: TJSONParseOptions;
       ErrorMessage: String;
+      LastChar: UTF8Char;
     procedure RaiseError(AError: string; Line: Integer = 0; Column: Integer = 0);
     procedure Push; inline;
     procedure Pop; {$ifndef DEBUG}inline; {$endif}
@@ -147,7 +155,7 @@ const
 procedure TmnJSONParser.RaiseError(AError: string; Line: Integer = 0; Column: Integer = 0);
 begin
   if Line > 0 then
-    ErrorMessage := AError + ' :: line: ' + Line.ToString + ' column: ' + Column.ToString
+    ErrorMessage := AError + ' :: line: ' + Line.ToString + ', column: ' + Column.ToString
   else
     ErrorMessage := AError + ' :: column: '+ Column.ToString;
 
@@ -234,6 +242,8 @@ begin
   LineNumber := 1;
   ColumnNumber := 1;
   Pair := nil;
+  Token := tkNone;
+  LastChar := #0;
 end;
 
 procedure TmnJSONParser.Finish;
@@ -294,18 +304,79 @@ var
     end;
   end;
 
+  procedure ContinueString;
+  begin
+    if (jsoStrict in Options) then
+    begin
+      if CharInSet(Ch, [#0, #10, #13]) then
+      begin
+        Error('End of line in string!');
+        exit;
+      end;
+    end;
+
+    if Ch = '\' then
+    begin
+      StringBuffer := StringBuffer + CopyString(Content, StartString, Index - StartString);
+      StartString := Index + 1;
+      Token := tkEscape;
+    end
+  end;
+
+  procedure EndString;
+  begin
+    if Expect = exName then
+    begin
+      //Creating a Pair Item
+      StringBuffer := StringBuffer + CopyString(Content, StartString, Index - StartString);
+      AcquireProc(Parent, StringBuffer, aqPair, Pair);
+      Expect := exAssign;
+    end
+    else if Expect = exValue then
+    begin
+      StringBuffer := StringBuffer + CopyString(Content, StartString, Index - StartString);
+      AcquireProc(Parent, StringBuffer, aqString, AObject);
+      Expect := exNext;
+    end
+    else
+      CheckExpected([exName, exValue], [Context]);
+    if StringBuffer <> '' then
+      StringBuffer := '';
+    Token := tkNone;
+    TokenString := tkNone;
+  end;
+
+  procedure SetEscapeChar(Ch: UTF8Char);
+  begin
+    StringBuffer := StringBuffer + Ch;
+    Next;
+    StartString := Index;
+    Token := TokenString;
+  end;
+
+  procedure IlligalCharacter(Ch: UTF8Char);
+  begin
+    Error('Illigal character: ' + Ch + ' '+ IntToHex(ord(Ch)));
+  end;
+
 begin
   if (@AcquireProc = nil) then
     Error('JSON Parser: Acquire is nil');
 {  if (Parent = nil) then //* nope Linting pass nil
     Error('JSON Parser: Parent is nil');}
 
+  if Content = nil then
+  begin
+    Inc(LineNumber);
+    exit;
+  end;
+
   Index := Start;
   StartString := -1; //* for strings
-
-  Token := tkNone;
+//  Token := tkNone;
   try
     repeat
+      LastChar := Ch;
       Ch := UTF8Char(Content[Index]);
       case Token of
         tkReturn:
@@ -313,6 +384,28 @@ begin
           if Ch = #10 then
             Next;
           Token := tkNone;
+        end;
+        tkCommentOpen:
+        begin
+          if Ch = '/' then
+            Token := tkSLComment
+          else if Ch = '*' then
+            Token := tkMLComment
+          else
+            Error('Expected / or * for comment, but found ' + Ch);
+          Next;
+        end;
+        tkSLComment:
+        begin
+          if CharInSet(Ch, [#0, #10, #13]) then
+            Token := tkNone;
+          Next;
+        end;
+        tkMLComment:
+        begin
+          if (Ch = '/') and (LastChar = '*') then
+            Token := tkNone;
+          Next;
         end;
         tkEscapeChar:
         begin
@@ -334,7 +427,7 @@ begin
               EscapeBuffer := '';
             end;
             StartString := Index;
-            Token := tkString;
+            Token := tkDQString;
 //            Next;
           end;
         end;
@@ -345,108 +438,105 @@ begin
             if CharInSet(Ch, [#0, #10, #13]) then
               Error('End of line in string!');
           end;
+
           case Ch of
-            'b': StringBuffer := StringBuffer + #8;
-            't': StringBuffer := StringBuffer + #9;
-            'n': StringBuffer := StringBuffer + #10;
-            'f': StringBuffer := StringBuffer + #12;
-            'r': StringBuffer := StringBuffer + #13;
-            '0': StringBuffer := StringBuffer + #0;
             'u':
             begin
               EscapeBuffer := '';
               Token := tkEscapeChar;
-            end
-            else
-              StringBuffer := StringBuffer + Ch;
-          end;
-          Next;
-          StartString := Index;
-          if Token = tkEscape then //* not in \u
-            Token := tkString;
-        end;
-        tkString:
-          begin
-            if Ch = '"' then
-            begin
-              if Expect = exName then
-              begin
-                //Creating a Pair Item
-                AcquireProc(Parent, StringBuffer + CopyString(Content, StartString, Index - StartString), aqPair, Pair);
-                Expect := exAssign;
-              end
-              else if Expect = exValue then
-              begin
-                AcquireProc(Parent, StringBuffer + CopyString(Content, StartString, Index - StartString), aqString, AObject);
-                Expect := exNext;
-              end
-              else
-                CheckExpected([exName, exValue], [Context]);
-              if StringBuffer<>'' then
-                StringBuffer := '';
-              Token := tkNone;
-            end
-            else
-            begin
-              if (jsoStrict in Options) then
-              begin
-                if CharInSet(Ch, [#0, #10, #13]) then
-                  Error('End of line in string!');
-              end;
-
-              if Ch = '\' then
-              begin
-                StringBuffer := StringBuffer + CopyString(Content, StartString, Index - StartString);
-                StartString := Index + 1;
-                Token := tkEscape;
-              end
+              Next;
+              StartString := Index;
             end;
-
-            //Next char yes, we do not need " anymore
+            #13:
+            begin
+              StringBuffer := StringBuffer + #13;
+              inc(LineNumber);
+              ColumnNumber := 1;
+              Next;
+              StartString := Index;
+            end;
+            #10:
+            begin
+              StringBuffer := StringBuffer + #10;
+              if LastChar <> #13 then
+              begin
+                Inc(LineNumber);
+                ColumnNumber := 1;
+              end;
+              Next;
+              StartString := Index;
+            end;
+            //* We need use map instead
+            'b': SetEscapeChar(#8);
+            't': SetEscapeChar(#9);
+            'n': SetEscapeChar(#10);
+            'f': SetEscapeChar(#12);
+            'r': SetEscapeChar(#13);
+            '0': SetEscapeChar(#0);
+            else
+              SetEscapeChar(Ch);
+          end;
+        end;
+        tkDQString:
+        begin
+          if Ch = '"' then
+            EndString
+          else
+            ContinueString;
+          //Next char yes, we do not need " anymore
+          Next;
+        end;
+        tkSQString:
+        begin
+          if Ch = '''' then
+            EndString
+          else
+            ContinueString;
+          //Next char yes, we do not need ' anymore
+          Next;
+        end;
+        tkIdentifire:
+        begin
+          if not CharInSet(Ch, ['A'..'Z', 'a'..'z', '0'..'9',  '_']) then
+          begin
+            if Expect = exName then
+            begin
+              //Creating a Pair Item
+              AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqPair, Pair);
+              Expect := exAssign;
+            end
+            else if Expect = exValue then
+            begin
+              AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqIdentifier, AObject);
+              Expect := exNext;
+            end
+            else
+              CheckExpected([exName, exValue], [Context]);
+            Token := tkNone;
+          end
+          else
+          begin
             Next;
           end;
-        tkIdentifire:
-          begin
-            if not CharInSet(Ch, ['A'..'Z', 'a'..'z', '0'..'9',  '_']) then
-            begin
-              if Expect = exName then
-              begin
-                //Creating a Pair Item
-                AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqPair, Pair);
-                Expect := exAssign;
-              end
-              else if Expect = exValue then
-              begin
-                AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqIdentifier, AObject);
-                Expect := exNext;
-              end
-              else
-                CheckExpected([exName, exValue], [Context]);
-              Token := tkNone;
-            end
-            else
-            begin
-              Next;
-            end;
-          end;
+        end;
         tkNumber:
+        begin
+          if not CharInSet(Ch, sNumberChars) then
           begin
-            if not CharInSet(Ch, sNumberChars) then
+            if Expect = exValue then
             begin
-              if Expect = exValue then
-              begin
-                AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqNumber, AObject);
-                Expect := exNext;
-              end
-              else
-                CheckExpected([exValue], [Context]);
-              Token := tkNone;
+              AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqNumber, AObject);
+              Expect := exNext;
             end
             else
-            begin
-              Next;
-            end;
+              CheckExpected([exValue], [Context]);
+            Token := tkNone;
+          end
+          else
+          begin
+            Next;
           end;
+        end;
         else
         begin
           case Ch of
@@ -459,8 +549,11 @@ begin
             end;
             #10:
             begin
-              Inc(LineNumber);
-              ColumnNumber := 1;
+              if LastChar <> #13 then
+              begin
+                Inc(LineNumber);
+                ColumnNumber := 1;
+              end;
             end;
             'A'..'Z', 'a'..'z', '_':
             begin
@@ -468,7 +561,7 @@ begin
               StartString := Index;
               Token := tkIdentifire;
             end;
-            '-', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9': //may start with . ?
+            '-', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.': //may start with . ?
             begin
               CheckExpected([exValue, exEnd]);
               StartString := Index;
@@ -478,7 +571,27 @@ begin
             begin
               CheckExpected([exName, exValue, exEnd]);
               StartString := Index + 1;
-              Token := tkString;
+              Token := tkDQString;
+              TokenString := tkDQString;
+            end;
+            '''':
+            begin
+              if jsoStrict in Options then
+                IlligalCharacter(Ch)
+              else
+              begin
+                CheckExpected([exName, exValue, exEnd]);
+                StartString := Index + 1;
+                Token := tkSQString;
+                TokenString := tkSQString;
+              end;
+            end;
+            '/':
+            begin
+              if jsoStrict in Options then
+                IlligalCharacter(Ch)
+              else
+                Token := tkCommentOpen;
             end;
             ':':
             begin
@@ -546,9 +659,7 @@ begin
                 Expect := exNext;
             end;
             else
-            begin
-              Error('Illigal character: ' + Ch + ' '+ IntToHex(ord(Ch)));
-            end
+              IlligalCharacter(Ch);
           end;
           Next;
         end;
