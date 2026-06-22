@@ -23,7 +23,7 @@ unit mnUtils;
 interface
 
 uses
-  {$ifdef windows}Windows,{$endif}
+  {$ifdef windows}Windows, ShellAPI, {$endif}
   Classes, SysUtils, StrUtils, DateUtils, Types, Character,
   mnTypes;
 
@@ -219,9 +219,10 @@ const
 function EscapeString(const S: string; const Esc: string; Chars: array of Char; const Escapes: array of string): string;
 function DescapeString(const S: string; const Esc: string; Chars: array of Char; const Escapes: array of string): string;
 
-function EscapeStringC(const S: string): string;
+function EscapeStringC(const S: string; QuoteChar: Char = '"'): string;
 function DescapeStringC(const S: string): string;
 function ToUnixPathDelimiter(const S: string): string;
+function HTMLEncode(const Str: string): string;
 
 function ExpandFile(const Name: string): string;
 
@@ -265,6 +266,10 @@ function IncludeURLDelimiter(const S: string): string; //deprecated 'AddEndURLDe
 function IsURLDelimiter(const S: string): Boolean;
 
 //If empty do not add
+function AddStartDelimiter(const Path: string; Delimiter: string; Force: Boolean = False): string; {$ifdef D-}inline;{$endif}
+function AddEndDelimiter(const Path: string; Delimiter: string; Force: Boolean = False): string; {$ifdef D-}inline;{$endif}
+
+//If empty do not add
 function AddStartURLDelimiter(const Path: string; Force: Boolean = False): string; {$ifdef D-}inline;{$endif}
 function AddEndURLDelimiter(const Path: string; Force: Boolean = False): string; {$ifdef D-}inline;{$endif}
 
@@ -281,8 +286,10 @@ function GetFormatSettings: TFormatSettings;
 
 //Ported from UniDates
 
-procedure ISOStrToDate(ISODate: String; out Y, M, D, H, N, S: Word; vDateSeparator: Char = '-'; TimeDivider: Char = #0; UseDefault: Boolean = False); overload;
-function ISOStrToDate(ISODate: String; vDateSeparator: Char = '-'; TimeDivider: Char = #0; UseDefault: Boolean = False): TDateTime; overload;
+procedure ISOStrToDate(const ISODate: String; out Y, M, D, H, N, S: Word; vDef: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = #0); overload;
+procedure ISOStrToDate(const ISODate: String; out Y, M, D, H, N, S: Word; vDateSeparator: Char = '-'; TimeDivider: Char = #0; UseDefault: Boolean = False); overload;
+function ISOStrToDate(const ISODate: String; vDateSeparator: Char = '-'; TimeDivider: Char = #0; UseDefault: Boolean = False): TDateTime; overload;
+function ISOStrToDate(const ISODate: String; vDef: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = #0): TDateTime; overload;
 
 function ISODateToStr(DateTime: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = ' '; TimeSeparator: Char = ':'; WithTime: Boolean = False): String; overload;
 function ISODateTimeToStr(DateTime: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = ' '): String; overload;
@@ -307,18 +314,18 @@ type
     {$endif}
   end;
 
-function StringOf(const Value: Array of Byte; CodePage: Word = CP_UTF8): string; overload; deprecated;
-function StringOf(const Value: TBytes; CodePage: Word = CP_UTF8): string; overload; deprecated;
-function StringOf(const Value: PByte; Size: Integer; CodePage: Word = CP_UTF8): string; overload; deprecated;
-function StringOf(const Value: PByte; Start, Size: Integer; CodePage: Word = CP_UTF8): string; overload; deprecated;
+function StringOf(const Value: Array of Byte; CodePage: Word = CP_UTF8): string; overload; 
+function StringOf(const Value: TBytes; CodePage: Word = CP_UTF8): string; overload; 
+function StringOf(const Value: PByte; Size: Integer; CodePage: Word = CP_UTF8): string; overload; 
+function StringOf(const Value: PByte; Start, Size: Integer; CodePage: Word = CP_UTF8): string; overload; 
 
 function StringOfUTF8(const Value: PByte; Size: Integer): string;
 
 //TODO fix ansi to widestring
 function HexToBin(Text : PByte; Buffer: PByte; BufSize: longint): Integer; overload;
-procedure BinToHex(Buffer: PByte; Text: PByte; BufSize: longint); overload;
-function StringToHex(const vData: string): string; overload;
-function StringToHex(const vData: PByte; vCount: Integer): string; overload;
+procedure BinToHex(Buffer: PByte; Output: PByte; BufSize: longint); overload;
+function StringToHex(const vStr: string): string; overload;
+function DataToHex(const vData: PByte; vCount: Integer): UTF8String; overload;
 function HexToString(const vData: string): string; overload;
 function UUIDToString(Guid: TGuid; Hyphen: string = '-'): string;
 
@@ -330,13 +337,28 @@ function DataToBinStr(var Data; Size: Integer; Separator: string = ''): string;
 type
   TEnumFilesOptions = set of (efFile, efDirectory, efFullPath);
   //If set Resume to false it will stop loop
-  TEnumFilesCallback = procedure(AObject: TObject; const FileName: string; Count, Level:Integer; IsDirectory: Boolean; var Resume: Boolean);
+  TEnumFilesCallback = procedure(AObject: TObject; const FileName: string; Index:Integer; IsDirectory: Boolean; var Resume: Boolean);
 
+//TODO make EnumFilesCallback
 procedure EnumFiles(FileList: TStrings; const Folder, Filter: string; Options: TEnumFilesOptions = [efFile]); overload;
+procedure EnumFiles(Callback: TEnumFilesCallback; AObject: TObject; const Folder, Filter: string; Options: TEnumFilesOptions = [efFile]); overload;
 function FirstFile(const Path, Files: string): string;
 function DeleteFiles(const Path, Files: string): Integer;
-function GetSizeOfFile(const vFile: string): Int64; //GetFileSize
+
 function LoadFileString(FileName: string): string;
+function LoadFileBytes(const vFile: TFileName): TBytes; //Thanks to Belal
+
+type
+  TFileInfo = record
+    Exists: Boolean;
+    TimeStamp: TDateTime;
+    Size: Int64;
+  end;
+  
+function GetFileInfo(const vFile: string; out Info: TFileInfo): Boolean; overload;
+function GetFileInfo(const vFile: string): TFileInfo; overload; 
+
+function GetSizeOfFile(const vFile: string): Int64; deprecated; //GetFileSize
 
 //mnMulDiv not using windows unit
 function mnMulDiv(nNumber, nNumerator, nDenominator: Integer): Integer; overload;
@@ -353,10 +375,12 @@ function SwapBytes(const Source: Int64): Int64; overload;
 //Rect functions
 procedure CenterRect(var R1: TRect; R2: TRect);
 
+procedure OpenURL(URL: string);
+
 var
   SystemAnsiCodePage: Cardinal; //used to convert from Ansi string, it is the default
   DefFormatSettings : TFormatSettings;
-
+  
 implementation
 
 {$ifdef FPC}
@@ -470,7 +494,7 @@ begin
     if Index > 0 then
     begin
       e := 1;
-      if Path[1] in ['\', '/'] then
+      if CharInSet(Path[1], ['\', '/']) then
       begin
         dec(l);
         inc(e);
@@ -479,7 +503,7 @@ begin
     else
     begin
       e := l;
-      if Path[l] in ['\', '/'] then
+      if CharInSet(Path[l], ['\', '/']) then
       begin
         dec(l);
         dec(e);
@@ -489,7 +513,7 @@ begin
     while l > 0 do
     begin
       C := Path[e];
-      if C in ['\', '/'] then
+      if CharInSet(C, ['\', '/']) then
         Inc(i);
       if (i = Abs(Index)) then
         Break;
@@ -1644,6 +1668,34 @@ begin
   end;
 end;
 
+//Thanks to https://stackoverflow.com/a/2971923
+
+function HTMLEncode(const Str: string): string;
+var
+  iPos, i: Integer;
+
+  procedure Encode(const AStr: String);
+  begin
+    Move(AStr[1], result[iPos], Length(AStr) * SizeOf(Char));
+    Inc(iPos, Length(AStr));
+  end;
+
+begin
+  SetLength(Result, Length(Str) * 6);
+  iPos := 1;
+  for i := 1 to length(Str) do
+    case Str[i] of
+      '<': Encode('&lt;');
+      '>': Encode('&gt;');
+      '&': Encode('&amp;');
+      '"': Encode('&quot;');
+    else
+      Result[iPos] := Str[i];
+      Inc(iPos);
+    end;
+  SetLength(Result, iPos - 1);
+end;
+
 function PeriodToString(vPeriod: Double; WithSeconds: Boolean): string;
 var
   h, m, s: integer;
@@ -1891,9 +1943,9 @@ begin
   Result := false;
 end;
 
-function EscapeStringC(const S: string): string;
+function EscapeStringC(const S: string; QuoteChar: Char = '"'): string;
 begin
-  Result := EscapeString(s, '\', [#8, #9, #10, #13, '\', '"'], ['b', 't', 'n', 'r', '\', '"']);
+  Result := EscapeString(s, '\', [#8, #9, #10, #13, '\', QuoteChar], ['b', 't', 'n', 'r', '\', QuoteChar]);
 end;
 
 function DescapeStringC(const S: string): string;
@@ -1937,7 +1989,7 @@ begin
     if Index > 0 then
     begin
       e := 1;
-      if Path[1] in ['\', '/'] then
+      if CharInSet(Path[1], ['\', '/']) then
       begin
         dec(l);
         inc(e);
@@ -1946,7 +1998,7 @@ begin
     else
     begin
       e := l;
-      if Path[l] in ['\', '/'] then
+      if CharInSet(Path[l], ['\', '/']) then
       begin
         dec(l);
         dec(e);
@@ -1956,7 +2008,7 @@ begin
     while l > 0 do
     begin
       C := Path[e];
-      if C in ['\', '/'] then
+      if CharInSet(C, ['\', '/']) then
         Inc(i);
       if (i = Abs(Index)) then
         Break;
@@ -2024,10 +2076,20 @@ end;
 
 function AddStartURLDelimiter(const Path: string; Force: Boolean): string;
 begin
+  Result := AddStartDelimiter(Path, URLDelimiter, Force);
+end;
+
+function AddEndURLDelimiter(const Path: string; Force: Boolean): string;
+begin
+  Result := AddEndDelimiter(Path, URLDelimiter, Force);
+end;
+
+function AddStartDelimiter(const Path: string; Delimiter: string; Force: Boolean): string;
+begin
   if Force or (Path <> '') then
   begin
-    if (Path = '') or not StartsStr(URLPathDelim, Path) then
-      Result := URLPathDelim + Path
+    if (Path = '') or not StartsStr(Delimiter, Path) then
+      Result := URLDelimiter + Path
     else
       Result := Path
   end
@@ -2035,12 +2097,12 @@ begin
     Result := Path
 end;
 
-function AddEndURLDelimiter(const Path: string; Force: Boolean): string;
+function AddEndDelimiter(const Path: string; Delimiter: string; Force: Boolean): string;
 begin
   if Force or (Path <> '') then
   begin
-    if (Path = '') or not EndsStr(URLPathDelim, Path) then
-      Result := Path + URLPathDelim
+    if (Path = '') or not EndsStr(Delimiter, Path) then
+      Result := Path + URLDelimiter
     else
       Result := Path
   end
@@ -2067,7 +2129,7 @@ begin
 end;
 
 
-procedure ISOStrToDate(ISODate: String; out Y, M, D, H, N, S: Word; vDateSeparator: Char; TimeDivider: Char; UseDefault: Boolean);
+procedure ISOStrToDate(const ISODate: String; out Y, M, D, H, N, S: Word; vDef: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = #0); overload;
 var
   Dt, Tm: String;
 begin
@@ -2080,10 +2142,7 @@ begin
         TimeDivider := ' ';
     end;
 
-    if UseDefault then
-      DecodeDate(Now, Y, M, D)
-    else
-      DecodeDate(0, Y, M, D);
+    DecodeDate(vDef, Y, M, D);
 
     Dt := SubStr(ISODate, TimeDivider, 0);
     Tm := SubStr(ISODate, TimeDivider, 1);
@@ -2122,11 +2181,27 @@ begin
   end;
 end;
 
-function ISOStrToDate(ISODate: String; vDateSeparator: Char; TimeDivider: Char; UseDefault: Boolean): TDateTime;
+procedure ISOStrToDate(const ISODate: String; out Y, M, D, H, N, S: Word; vDateSeparator: Char; TimeDivider: Char; UseDefault: Boolean);
+begin
+  if UseDefault then
+    ISOStrToDate(ISODate, Y, M, D, H, N, S, Now, vDateSeparator, TimeDivider)
+  else
+    ISOStrToDate(ISODate, Y, M, D, H, N, S, 0, vDateSeparator, TimeDivider);
+end;
+
+function ISOStrToDate(const ISODate: String; vDateSeparator: Char; TimeDivider: Char; UseDefault: Boolean): TDateTime;
 var
   Y, M, D, H, N, S: Word;
 begin
   ISOStrToDate(ISODate, Y, M, D, H, N, S, vDateSeparator, TimeDivider, UseDefault);
+  Result := EncodeDate(Y, M, D) + EncodeTime(H, N, S, 0);
+end;
+
+function ISOStrToDate(const ISODate: String; vDef: TDateTime; vDateSeparator: Char; TimeDivider: Char): TDateTime; overload;
+var
+  Y, M, D, H, N, S: Word;
+begin
+  ISOStrToDate(ISODate, Y, M, D, H, N, S, vDef, vDateSeparator, TimeDivider);
   Result := EncodeDate(Y, M, D) + EncodeTime(H, N, S, 0);
 end;
 
@@ -2327,7 +2402,7 @@ begin
     end;
 
     //if not yyStr.StartsWith('-') and not yyStr.StartsWith('+') and not yyStr[1].IsDigit then
-    if not yyStr.StartsWith('-') and not yyStr.StartsWith('+') and not IsDigit(yyStr[1]) then
+    if not yyStr.StartsWith('-') and not yyStr.StartsWith('+') and not {$ifdef FPC}IsDigit(yyStr[1]){$else}yyStr[1].IsDigit{$endif} then
     begin
       tmpStr := tz;
       tz := yyStr;
@@ -2534,17 +2609,17 @@ begin
     Result := '';
 end;
 
-function StringToHex(const vData: string): string; overload;
+function StringToHex(const vStr: string): string; overload;
 begin
-  if vData<>'' then
-    Result := StringToHex(PByte(vData), ByteLength(vData))
+  if vStr <> '' then
+    Result := DataToHex(PByte(vStr), ByteLength(vStr))
   else
     Result := '';
 end;
 
-function StringToHex(const vData: PByte; vCount: Integer): string;
+function DataToHex(const vData: PByte; vCount: Integer): UTF8String;
 begin
-  SetLength(Result, 2*vCount);
+  SetLength(Result, vCount * 2);
   BinToHex(vData, PByte(Result), vCount);
 end;
 
@@ -2570,20 +2645,18 @@ begin
   Result := BufSize - I;
 end;
 
-procedure BinToHex(Buffer: PByte; Text: PByte; BufSize: longint);
+procedure BinToHex(Buffer: PByte; Output: PByte; BufSize: longint);
 const
   Convert: array[0..15] of Byte = ($30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$41,$42,$43,$44,$45,$46) ; //AnsiString('0123456789ABCDEF');
 var
   I: Integer;
-  p: PByte;
 begin
-  p := Text;
   for I := 0 to BufSize - 1 do
   begin
-    p^ := Convert[Buffer[I] shr 4];
-    Inc(p);
-    P^ := Convert[Buffer[I] and $F];
-    Inc(p);
+    Output^ := Convert[Buffer[I] shr 4];
+    Inc(Output);
+    Output^ := Convert[Buffer[I] and $F];
+    Inc(Output);
   end;
 end;
 
@@ -2648,28 +2721,68 @@ begin
     Result := -1;
 end;
 
-procedure EnumFiles(FileList: TStrings; const Folder, Filter: string; Options: TEnumFilesOptions); overload;
+function GetFileInfo(const vFile: string; out Info: TFileInfo): Boolean; 
+var
+  R: TSearchRec;
+begin
+  if SysUtils.FindFirst(vFile, faAnyFile, R) = 0 then
+  begin
+    Info.TimeStamp := R.TimeStamp;
+    Info.Size := R.Size;
+    Result := True;
+    SysUtils.FindClose(R);
+  end
+  else
+  begin
+    Info := Default(TFileInfo);
+    Result := False;
+  end;
+end;
+
+function GetFileInfo(const vFile: string): TFileInfo; overload; inline;
+begin
+  GetFileInfo(vFile, Result);
+end;
+
+procedure EnumFiles(Callback: TEnumFilesCallback; AObject: TObject; const Folder, Filter: string; Options: TEnumFilesOptions = [efFile]); overload;
 var
   R: integer;
   SearchRec: TSearchRec;
   aFolder: string;
+  Index: Integer;
+  Resume: Boolean;
 begin
   aFolder := IncludeTrailingPathDelimiter(Folder);
   R := FindFirst(aFolder + Filter, faAnyFile, SearchRec);
+  Index := 0;
   while R = 0 do
   begin
     if (((efDirectory in Options) and ((SearchRec.Attr and faDirectory) = faDirectory))
       or ((efFile in Options) and ((SearchRec.Attr and faDirectory) <> faDirectory)))
       and ((SearchRec.Name <> '.') and (SearchRec.Name <> '..')) then
     begin
+      Resume := True;
       if efFullPath in Options then
-        FileList.Add(aFolder + SearchRec.Name)
+        Callback(AObject, aFolder + SearchRec.Name, Index, (SearchRec.Attr and faDirectory) = faDirectory, Resume)
       else
-        FileList.Add(SearchRec.Name);
+        Callback(AObject, SearchRec.Name, Index, (SearchRec.Attr and faDirectory) = faDirectory, Resume);
+      if not Resume then
+        break;
+      Index := Index + 1;
     end;
     R := FindNext(SearchRec);
   end;
   FindClose(SearchRec);
+end;
+
+procedure EnumFilesCallback(AObject: TObject; const FileName: string; Index:Integer; IsDirectory: Boolean; var Resume: Boolean);
+begin 
+  (AObject as TStrings).Add(FileName);
+end;
+
+procedure EnumFiles(FileList: TStrings; const Folder, Filter: string; Options: TEnumFilesOptions); overload;
+begin
+  EnumFiles(EnumFilesCallback, FileList, Folder, Filter, Options);
 end;
 
 function DeleteFiles(const Path, Files: string): Integer;
@@ -2715,6 +2828,30 @@ begin
   finally
     Stream.Free;
   end;
+end;
+
+function LoadFileBytes(const vFile: TFileName): TBytes;
+var
+  aSize: Int64;
+  aStream: TFileStream;
+begin
+  if FileExists(vFile) then
+  begin
+    aStream := TFileStream.Create(vFile, fmOpenRead or fmShareDenyWrite);
+    try
+      aSize := aStream.Size;
+      if aSize>0 then
+      begin
+        SetLength(Result, aSize);
+        aStream.ReadBuffer(Result, aSize);
+        Exit;
+      end
+    finally
+      aStream.Free;
+    end;
+  end;
+
+  Result := nil;
 end;
 
 function mnMulDiv(nNumber, nNumerator, nDenominator: Integer): Integer;
@@ -2822,6 +2959,13 @@ end;
 function SwapBytes(const Source: Int64): Int64; overload;
 begin
   SwapBytes(Source, Result, SizeOf(Result));
+end;
+
+procedure OpenURL(URL: string);
+begin
+  {$ifdef windows}
+  ShellExecute(0, 'Open', PWideChar(URL), nil, nil, 0);
+  {$endif}
 end;
 
 initialization

@@ -141,7 +141,7 @@ object Main: TMain
       Left = 233
       Top = 6
       Width = 60
-      Height = 23
+      Height = 26
       Align = alLeft
       AutoSize = False
       Caption = '0'
@@ -204,7 +204,7 @@ object Main: TMain
       Left = 127
       Top = 6
       Width = 60
-      Height = 23
+      Height = 26
       Align = alLeft
       AutoSize = False
       Caption = '0'
@@ -229,7 +229,7 @@ object Main: TMain
       Left = 35
       Top = 6
       Width = 60
-      Height = 23
+      Height = 26
       Align = alLeft
       AutoSize = False
       Caption = '0'

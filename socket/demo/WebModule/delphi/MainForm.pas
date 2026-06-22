@@ -105,18 +105,18 @@ begin
 
   HttpServer.Bind := BindEdit.Text;
   HttpServer.Port := PortEdit.Text;
-  HttpServer.UseSSL := UseSSLChk.Checked;
-  if HttpServer.UseSSL then
+  HttpServer.IsSecure := UseSSLChk.Checked;
+  if HttpServer.IsSecure then
   begin
     HttpServer.CertificateFile := 'HttpServer.crt';
     HttpServer.PrivateKeyFile := 'HttpServer.private.key';
   end;
 
-  aDocModule := HttpServer.Modules.Find<TmodWebFileModule>;
+  aDocModule := HttpServer.Module<TmodWebFileModule>;
 
   if aDocModule <> nil then
   begin
-    aDocModule.HomePath := aHomePath;
+    aDocModule.HomeFolder := aHomePath;
     aDocModule.AliasName := DocAliasEdit.Text;
     (aDocModule as TmodWebFileModule).ServeFiles:= [serveEnabled, serveIndex, serveDefault, serveSmart];
 
@@ -134,22 +134,22 @@ begin
     //HttpServer.SetNotfound;
   end;
 
-  aHomeModule := HttpServer.Modules.Find<THomeModule>;
+  aHomeModule := HttpServer.Module<THomeModule>;
   if aHomeModule <> nil then
   begin
     aHomeModule.AliasName := HomeAliasEdit.Text;
-    aHomeModule.WebApp.AppPath := ExtractFilePath(Application.ExeName);
+    aHomeModule.Web.AppFolder := ExtractFilePath(Application.ExeName);
 
 
 //    aHomeModule.Domain := 'localhost';
 //    aHomeModule.Port := HttpServer.Port;
 //    aHomeModule.AssetsURL := '/' + aHomeModule.AliasName + '/assets/';
-    aHomeModule.WebApp.HomePath := IncludePathDelimiter(aHomePath);
-    aHomeModule.HomePath := IncludePathDelimiter(aHomePath);
-    aHomeModule.WorkPath := aHomeModule.WebApp.AppPath;
-    aHomeModule.WebApp.CompactMode := False;
-    ForceDirectories(aHomeModule.WorkPath + 'cache');
-    ForceDirectories(aHomeModule.WorkPath + 'temp');
+    aHomeModule.Web.HomeFolder := IncludePathDelimiter(aHomePath);
+    aHomeModule.HomeFolder := IncludePathDelimiter(aHomePath);
+    aHomeModule.WorkFolder := aHomeModule.Web.AppFolder;
+    aHomeModule.Web.CompactMode := False;
+    ForceDirectories(aHomeModule.WorkFolder + 'cache');
+    ForceDirectories(aHomeModule.WorkFolder + 'temp');
 
     if KeepAliveChk.Checked then
       aHomeModule.UseKeepAlive := ovYes
@@ -311,8 +311,8 @@ begin
   HttpServer.OnLog := HttpServerLog;
   HttpServer.Logging := True;
 
-  HttpServer.Modules.Add(TmodWebFileModule.Create('doc', 'doc'));
-  HttpServer.Modules.Add(THomeModule.Create('home', 'home'));
+  HttpServer.Add(TmodWebFileModule, 'doc', 'doc');
+  THomeModule.Create(HttpServer, 'home', 'home');
 
   aIni := TIniFile.Create(ExtractFilePath(Application.ExeName) + 'config.ini');
   try

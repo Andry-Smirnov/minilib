@@ -226,8 +226,10 @@ const
 function alpn_select_cb(ssl: PSSL; var outdata: PByte; var outlen: integer; const indata: PByte; inlen: Byte; arg: Pointer): Integer; cdecl;
 var
   ret: Integer;
+  b: byte; 
 begin
-  ret := SSL_select_next_proto(PUTF8Char(outdata), outlen, PUTF8Char(indata), inlen, PUTF8Char(sALPNProts), Length(sALPNProts));
+  ret := SSL_select_next_proto(outdata, b, PUTF8Char(indata), inlen, PUTF8Char(sALPNProts), Length(sALPNProts));
+  outlen := b;
 
   if ret <> OPENSSL_NPN_NEGOTIATED then
     Result := SSL_TLSEXT_ERR_NOACK
@@ -235,7 +237,7 @@ begin
     Result := SSL_TLSEXT_ERR_OK;
 end;
 
-procedure SSL_CTX_msg_callback(write_p: integer; version: integer; content_type: integer; buf: pointer; len: Cardinal; ssl: PSSL; arg: pointer); cdecl;
+procedure SSL_CTX_msg_callback(write_p: integer; version: integer; content_type: integer; buf: pointer; len: NativeUInt; ssl: PSSL; arg: pointer); cdecl;
 var
   b: TBytes;
   s: string;
@@ -372,7 +374,7 @@ var
   rsa: PRSA;
   name: PX509_NAME;
   bne: PBIGNUM;
-  sign: PX509_sign;
+  sign: Integer;
   res: Integer;
 begin
   x := nil;
@@ -457,7 +459,7 @@ begin
     AddExt(x, NID_subject_key_identifier, 'hash');
 
     sign := X509_sign(x, pk, EVP_sha256());
-    if (sign = nil) then
+    if (sign = 0) then
       exit(False);
     x509p := x;
     pkeyp := pk;
@@ -829,6 +831,7 @@ end;
 function TSSL.Read(var Buf; Size: Integer; out ReadSize: Integer): TsslError;
 var
   err, errno: Integer;
+  errStr: PUTF8Char;
 begin
   if not Active then
     raise EmnOpenSSLException.Create('SSL object is not Active');
@@ -839,22 +842,18 @@ begin
     err := SSL_get_error(Handle, ReadSize);
     errno := WallSocket.GetSocketError(FSocket);
 
-    {
-      Here we have a problem some are not real error, Disconnected gracefully, or read time out
-    }
-    if err = SSL_ERROR_ZERO_RETURN then
-      Result := seClosed
-    else if err = SSL_ERROR_SYSCALL then
-    begin
-      Log.WriteLn(lglInfo, 'Read: ' + ERR_error_string(err, nil));
-      Log.WriteLn(lglInfo, 'Read: Socket Error: ' + IntToStr(errno));
-      Result := seInvalid;
-      //check time out
-    end
+    case err of
+      SSL_ERROR_ZERO_RETURN:
+        Result := seClosed;
+      SSL_ERROR_SYSCALL:
+        begin
+          errStr := ERR_error_string(err, nil);
+          Log.WriteLn(lglInfo, 'Read: ' + string(errStr) + ', Socket Error: ' + IntToStr(errno));
+          Result := seInvalid;
+        end;
     else
-    begin
-      Log.WriteLn('Read: ' + ERR_error_string(err, nil));
-      Log.WriteLn('Read: Socket Error: ' + IntToStr(errno));
+      errStr := ERR_error_string(err, nil);
+      Log.WriteLn('Read: ' + string(errStr) + ', Socket Error: ' + IntToStr(errno));
       Result := seInvalid;
     end;
 
@@ -992,7 +991,7 @@ begin
   //o := SSL_OP_ALL or SSL_OP_NO_SSLv2 or SSL_OP_NO_SSLv3 or SSL_OP_SINGLE_DH_USE or SSL_OP_SINGLE_ECDH_USE or SSL_OP_CIPHER_SERVER_PREFERENCE;
   o := SSL_OP_ALL or SSL_OP_SINGLE_DH_USE or SSL_OP_SINGLE_ECDH_USE;
 
-  o := o + SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION or SSL_MODE_RELEASE_BUFFERS;
+  o := o or SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION;
 
   if coNoCompressing in Options then
     o := o or SSL_OP_NO_COMPRESSION;
@@ -1000,13 +999,7 @@ begin
   if coServer in Options then
     o := o or SSL_OP_CIPHER_SERVER_PREFERENCE;
 
-  o := o or SSL_OP_NO_SSLv2;
-  o := o or SSL_OP_NO_SSLv3;
-
-  { Set SSL_MODE_RELEASE_BUFFERS. This potentially greatly reduces memory
-       usage for no cost at all. */
-  SSL_CTX_set_mode(self->ctx, SSL_MODE_RELEASE_BUFFERS);
-  }
+  o := o or SSL_OP_NO_SSLv2 or SSL_OP_NO_SSLv3;
 
   SSL_CTX_set_options(Handle, o);
 

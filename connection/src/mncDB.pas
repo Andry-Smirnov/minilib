@@ -17,7 +17,7 @@ interface
 
 uses
   SysUtils, Classes, Contnrs,
-  mnUtils, mncCommons, mncConnections,
+  mnClasses, mnUtils, mncCommons, mncConnections, 
   mncORM, mncMeta;
 
 type
@@ -34,9 +34,8 @@ type
 
 { TmncEngines }
 
-  TmncEngines = class(TObjectList)
+  TmncEngines = class(TmnObjectList<TmncEngine>)
   private
-    function GetItems(Index: Integer): TmncEngine;
   public
     function ComposeConnectionString(EngineName, Resource, Host, Port, User, Password, Role: string): string; overload;
     function ComposeConnectionString(Connection: TmncConnection): string; overload;
@@ -57,7 +56,6 @@ type
     procedure EnumConnections(Strings: TStrings);
     procedure EnumORMs(Strings: TStrings);
     procedure EnumMatas(Strings: TStrings);
-    property Items[Index:Integer]: TmncEngine read GetItems; default;
   end;
 
 function Engines: TmncEngines;
@@ -75,11 +73,6 @@ begin
 end;
 
 { TmncEngines }
-
-function TmncEngines.GetItems(Index: Integer): TmncEngine;
-begin
-  Result := inherited Items[Index] as TmncEngine;
-end;
 
 function TmncEngines.ComposeConnectionString(EngineName, Resource, Host, Port, User, Password, Role: string): string;
 begin

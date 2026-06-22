@@ -9,9 +9,15 @@ ref
 *.dcu
 *.local
 *.dsk
+*.bak
+*.exe
+*.dll
 /lib/doc
 /lib/backup
 /reports/source/delphi
 /pos/delphi/demo
+/socket/source/mnWebElements.res
 Win32
 Linux64
+x86_64-win64
+

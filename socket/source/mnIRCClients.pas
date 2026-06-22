@@ -841,7 +841,7 @@ begin
   if ScanString(Original, p, c, '!', true) then
   begin
     Nick := MidStr(Original, 1, c);
-    Address := MidStr(Original, c + 1, MaxInt);
+    Address := MidStr(Original, c + 2, MaxInt);
   end;
 end;
 
@@ -1389,7 +1389,7 @@ var
 begin
   ParseUserName(vUser, aNickName, aMode);
   aUser := Find(aNickName);
-  if aUser = nil then
+  if aUser <> nil then
     Remove(aUser);
 end;
 
@@ -1534,7 +1534,7 @@ begin
   with Client do
     if Progress = prgActive then
     begin
-      if NickIndex >= Nicks.Count then
+      if NickIndex >= Nicks.Count then //TODO add tries count about 10 times
         Quit('Nick conflict')
       else
       begin
@@ -1641,8 +1641,9 @@ end;
 
 procedure TWELCOME_IRCReceiver.DoExecute(vCommand: TIRCCommand; var NextCommand: TIRCQueueCommand);
 begin
-  inherited;
-  vCommand.User := vCommand.PullParam;
+  //:server 001 nick :Welcome message
+  vCommand.Target := vCommand.PullParam;
+  vCommand.User := vCommand.Target;
   vCommand.Msg := vCommand.PullParam;
   Client.SetProgress(prgReady);
   Client.FSession.ServerChannel := vCommand.Sender;
@@ -1790,7 +1791,7 @@ begin
         end;
       end;
     end;
-    if not FStream.Connected and FInternalConnected then
+    if (FStream <> nil) and not FStream.Connected and FInternalConnected then
     begin
       FInternalConnected := False;
       Log('Disconnected');
@@ -1921,7 +1922,7 @@ begin
   Tries := 0;
   if StreamConnected then
     Terminate;
-  Synchronize(Client.PostClosed);
+  Queue(Client.PostClosed);
   FreeAndNil(FStream);
 end;
 
@@ -2111,6 +2112,7 @@ end;
 destructor TIRCCommand.Destroy;
 begin
   FreeAndNil(FParams);
+  inherited;
 end;
 
 procedure TIRCCommand.AddParam(AValue: string);
@@ -2392,8 +2394,8 @@ begin
         end;
       end;
       if not aCMDProcessed then
-      begin
-        SendRaw(Format(UpperCase(m) + ' %s :%s', [vChannel, s]), prgReady);
+      begin        
+        SendRaw(UpperCase(m) + ' ' + vChannel + ' :' + s, prgReady);
         aCMDProcessed := True;
       end;
     end;
@@ -2472,23 +2474,19 @@ begin
   aNick := Nicks[0];
   Inc(NickIndex);
 
-  Session.SetNick(aNick);
-  SendRaw(Format('USER %s 0 * :%s', [Username, RealName]));
   if FPassword <> '' then
   begin
     if AuthType = authPass then
-    begin
       SendRaw(Format('PASS %s:%s', [Username, FPassword]));
-      SetNick(aNick);
-    end
-    else if AuthType = authIDENTIFY then
-    begin
-      SetNick(aNick);
+  end;
+  Session.SetNick(aNick);
+  SetNick(aNick);
+  SendRaw(Format('USER %s 0 * :%s', [Username, RealName]));
+  if FPassword <> '' then
+  begin
+    if AuthType = authIDENTIFY then
       SendRaw(Format('NICKSERV IDENTIFY %s %s', [Username, Password]));
-    end
-  end
-  else
-    SetNick(aNick);
+  end;
   JoinChannels;
   DoConnected;
 end;
@@ -2513,7 +2511,7 @@ end;
 
 procedure TmnIRCClient.SetTopic(AChannel: string; const ATopic: string);
 begin
-  SendRaw(Format('TOPIC %s %s', [AChannel, ATopic]));
+  SendRaw(Format('TOPIC %s :%s', [AChannel, ATopic]));
 end;
 
 procedure TmnIRCClient.SetPassword(const Value: string);

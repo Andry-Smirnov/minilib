@@ -2,7 +2,7 @@
 {**
  *  This file is part of the "Mini Library"
  *
- * @license   modifiedLGPL (modified of mod://www.gnu.org/licenses/lgpl.html)
+ * @license   modifiedLGPL (modified of http://www.gnu.org/licenses/lgpl.html)
  *            See the file COPYING.MLGPL, included in this distribution,
  * @author    Zaher Dirkey <zaher, zaherdirkey>
  * @author    Belal Hamed <belal, belalhamed@gmail.com>
@@ -19,11 +19,11 @@
             Userinfo       Host      Port                       URI (always started / )
             ┌──┴───┐ ┌──────┴────────┌┴┐┌────────────────────────┴───────────────────────────────┐
 GET https://john.doe@www.example.com:123/username/forum/questions/?tag=networking&order=newest#top
-                     └──────┬──────┘    └───────────────┬────────┘└───────────┬─────────────┘ └┬─┘
-                       DomainName                    Address                Query           Fragment
-                                        └───┬───┘└──┬──┘└──┬─────┘            ┬
-                                        Directory Alias   Path              Params
-    └────────────────────────┬─────────┘       Module Name
+    |                └──────┬──────┘    └───────────────┬────────┘└───────────┬─────────────┘ └┬─┘
+    |                  DomainName                    Address                Query           Fragment
+    |                                   └───┬───┘└──┬──┘└──┬─────┘          └─┬─┘
+    |                                   Namespace Alias Directory           Params
+    └────────────────────────┬──────────┘         Module 
                            HomeURL
 }
 
@@ -72,7 +72,9 @@ type
   TSendFileDisposition = (sdDefault, sdInline, sdAttachment);
   TmodServeFiles = set of (
     serveEnabled,
+//    serveUnauthorized, //* if file not exist not to render the schema
     serveIndex,
+    serveIndexRoot, //if it root serve index too not schema TODO
     serveSmart, //
     serveDefault
 //    serveRender
@@ -88,12 +90,12 @@ type
 
   TmodWebModule = class abstract(TmodModule)
   private
-    FHomePath: string;
+    FHomeFolder: string;
     FOrigins: TStrings;
-    FWorkPath: string;
+    FWorkFolder: string;
 
     //FSmartURL: Boolean;
-    procedure SetHomePath(AValue: string);
+    procedure SetHomeFolder(AValue: string);
     procedure SetOrigins(AValue: TStrings);
   protected
     procedure Created; override;
@@ -108,17 +110,19 @@ type
     destructor Destroy; override;
     //property SmartURL: Boolean read FSmartURL write FSmartURL;
   public
-    //protocol://domain:port/alias/directory
-    //--------HOST URL------/alias/directory
-    //----------HOME URL----------/directory
-    Domain: string; //localhost
-    Port: string;
+    //protocol://domain:port/namespace/alias/directory
+    //--------HOST URL------/namespace/alias/directory
+    //----------HOME URL--------------/directory
+    Domain: string; //localhost    
 
+    function GetDefaultURL: string; virtual;
+    
     property Origins: TStrings read FOrigins write SetOrigins;
     //Public Path
-    property HomePath: string read FHomePath write SetHomePath;
+    property HomeFolder: string read FHomeFolder write SetHomeFolder;
     //Private Path
-    property WorkPath: string read FWorkPath write FWorkPath;
+    property WorkFolder: string read FWorkFolder write FWorkFolder;    
+    
   end;
   { TmodWebFileModule }
 
@@ -176,31 +180,28 @@ type
 
   TmodWebModules = class(TmodModules)
   protected
-    function CreateRequest(Astream: TmnBufferStream): TmodRequest; override;
+    function CreateRequest(AStream: TmnBufferStream): TmodRequest; override;
   public
     procedure ParseHead(ARequest: TmodRequest; const RequestLine: string); override;
   end;
 
-  { TmodCustomWebServer }
+  { TmodWebServer }
 
-  TmodCustomWebServer = class(TmodModuleServer)
+  TmodWebServer = class(TmodModuleServer)
   protected
     function CreateModules: TmodModules; override;
   public
     constructor Create; override;
-    procedure AddChallengeAcme(const AHomePath: string);
-    procedure AddFileModule(const Alias: string; const AHomePath: string);
+    procedure AddChallengeAcme(const AHomeFolder: string);
+    procedure AddFileModule(const Alias: string; const AHomeFolder: string);
     procedure AddRedirectHttps;
     procedure SetFallbackRedirect(ToLocation: string);
     procedure SetNotfound;
   end;
 
-  //*****************************************
+  TmodWebServerClass = class of TmodWebServer;
 
-  TmodWebServer = class(TmodCustomWebServer)
-  protected
-    procedure Created; override;
-  end;
+  //*****************************************
 
   {$ifndef FPC}
   TmodWebEventProc = reference to procedure(vRequest: TmodRequest; vResponse: TwebResponse; var vResult: TmodRespondResult);
@@ -211,7 +212,7 @@ type
     procedure InitItems; override;
   end;
 
-  TmodWebEventServer = class(TmodCustomWebServer)
+  TmodWebEventServer = class(TmodWebServer)
   public
     constructor Create(const vPort: string; vProc: TmodWebEventProc); reintroduce;
   end;
@@ -302,7 +303,7 @@ type
   TWebServerItem = class(TmnNamedObject)
   private
     FOwnIt: Boolean;
-    FServer: TmodCustomWebServer;
+    FServer: TmodWebServer;
     function GetStarted: Boolean;
   public
     constructor Create;
@@ -311,7 +312,7 @@ type
     procedure Start;
     procedure Stop;
 
-    property Server: TmodCustomWebServer read FServer;
+    property Server: TmodWebServer read FServer;
     property Started: Boolean read GetStarted;
   end;
 
@@ -321,17 +322,14 @@ type
   private
     FStarted: Boolean;
   public
-    function AddServer(AName: string; AServer: TmodCustomWebServer; OwnIt: Boolean = True): Integer;
+    function AddServer(AName: string; AServer: TmodWebServer; OwnIt: Boolean = True): Integer;
     procedure Start;
     procedure Stop;
     property Started: Boolean read FStarted;
   end;
 
-var
-  modLock: TCriticalSection = nil;
-
-function WebFindDocument(const HomePath, Path: string; out Document:string; Smart: Boolean = False): Boolean;
-function WebExpandFile(HomePath, Path: string; out Document: string; Smart: Boolean = False): Boolean;
+function WebFindDocument(const HomeFolder, Path: string; out Document:string; Smart: Boolean = False): Boolean;
+function WebExpandFile(HomeFolder, Path: string; out Document: string; Smart: Boolean = False): Boolean;
 function WebExpandToRoot(FileName: string; Root: string): string;
 function FindDefaultDocument(Root: string; DefaultDocuments: TStringList): string;
 procedure WebServeFolder(Title, Path: string; Response: TwebResponse; Request: TmodRequest);
@@ -354,11 +352,11 @@ begin
   Result := FWebServers;
 end;
 
-function WebFindDocument(const HomePath, Path: string; out Document:string; Smart: Boolean = False): Boolean;
+function WebFindDocument(const HomeFolder, Path: string; out Document:string; Smart: Boolean = False): Boolean;
 var
   aTruncPath: string;
 begin
-  Document := HomePath;
+  Document := HomeFolder;
   // path = '' or '/' or './' or '../'
   if not ((Path = '') or StartsDelimiter(Path) or StartsStr('./', Path) or StartsStr('../', Path)) then //* some file or folder names starts with . like '.well-known/acme-challenge/'
     Document := IncludePathDelimiter(Document);
@@ -370,19 +368,18 @@ begin
     aTruncPath := TruncPath(Path, -1);
     if aTruncPath='' then
     begin
-      Document := IncludePathDelimiter(HomePath);
+      Document := IncludePathDelimiter(HomeFolder);
       Result := DirectoryExists(Document);
     end
     else
-      Result := WebFindDocument(HomePath, aTruncPath, Document, Smart);
+      Result := WebFindDocument(HomeFolder, aTruncPath, Document, Smart);
   end;
 end;
 
-function WebExpandFile(HomePath, Path: string; out Document: string; Smart: Boolean): Boolean;
+function WebExpandFile(HomeFolder, Path: string; out Document: string; Smart: Boolean): Boolean;
 begin
-  HomePath := ExcludePathDelimiter(ExpandFile(CorrectPath(HomePath)));
-  Result := WebFindDocument(HomePath, CorrectPath(Path), Document, Smart);
-  Result := Result and StartsStr(HomePath, Document); //check if out of root :)
+  HomeFolder := ExcludePathDelimiter(ExpandFile(CorrectPath(HomeFolder)));
+  Result := WebFindDocument(HomeFolder, CorrectPath(Path), Document, Smart);
 end;
 
 function WebExpandToRoot(FileName: string; Root: string): string;
@@ -429,11 +426,11 @@ end;
 
 { TmodWebModule }
 
-procedure TmodWebModule.SetHomePath(AValue: string);
+procedure TmodWebModule.SetHomeFolder(AValue: string);
 begin
-  if FHomePath = AValue then
+  if FHomeFolder = AValue then
 	  exit;
-  FHomePath := AValue;
+  FHomeFolder := AValue;
 end;
 
 procedure TmodWebModule.SetOrigins(AValue: TStrings);
@@ -448,7 +445,7 @@ begin
   UseKeepAlive := ovUndefined;
   UseCompressing := ovNo;
   UseWebSocket := True;
-  FHomePath := '';
+  FHomeFolder := '';
   FOrigins := TStringList.Create;
 end;
 
@@ -471,6 +468,30 @@ begin
   begin
     ARequest.Path := DeleteSubPath(ARequest.Route[0], ARequest.Path);
   end;
+end;
+
+function TmodWebModule.GetDefaultURL: string;
+var
+  url: string;
+begin   
+  if Domain <> '' then
+    Result := Domain
+  else
+    Result := 'localhost';
+    
+  if Server.IsSecure then
+  begin
+    Result := 'https://' + Result;
+    if Server.Port <> '443' then
+      Result := Result + ':' + Server.Port;    
+  end
+  else
+  begin
+    Result := 'http://' + Result;
+    if Server.Port <> '80' then
+      Result := Result + ':' + Server.Port;    
+  end;    
+  Result := Result + Domain + AddStartURLDelimiter(AliasName);
 end;
 
 procedure TmodWebModule.DoMatch(const ARequest: TmodRequest; var vMatch: Boolean);
@@ -496,7 +517,7 @@ end;
 procedure TmodWebModule.Log(S: string);
 begin
   inherited;
-  Modules.Log(S);
+  Server.Log(S);
 end;
 
 { TmodWebFileModule }
@@ -511,6 +532,7 @@ begin
   inherited;
   RegisterCommand('GET', TwebGetPostCommand, True);
   RegisterCommand('POST', TwebGetPostCommand);
+  RegisterCommand('OPTIONS', TwebOptionCommand);
   RegisterCommand('INFO', TmodServerInfoCommand);
 end;
 
@@ -528,7 +550,7 @@ end;
 procedure TmodWebFileModule.Started;
 begin
   inherited;
-  if HomePath = '' then
+  if HomeFolder = '' then
     raise Exception.Create('Home path not set!');
 end;
 
@@ -561,7 +583,7 @@ end;
 procedure TwebFileCommand.Prepare(var Result: TmodRespondResult);
 begin
   inherited;
-  Response.HomePath := Module.HomePath;
+  Response.HomeFolder := Module.HomeFolder;
 end;
 
 procedure TwebFileCommand.Created;
@@ -589,12 +611,15 @@ end;}
 procedure WebServeFolder(Title, Path: string; Response: TwebResponse; Request: TmodRequest);
 var
   Files: TStringList;
-  procedure AddLink(s: string);
+  procedure AddLink(s: string; IsFolder: Boolean);
   begin
-    Response.Stream.WriteUTF8Line('<ui>');
-    Response.Stream.WriteUTF8Line('<a href="' + s + '\">' + s + '</a>');
+    Response.Stream.WriteUTF8Line('<li>');
+    if IsFolder then    
+      Response.Stream.WriteUTF8Line('<a href="' + s + '/">' + s + '</a>')
+    else
+      Response.Stream.WriteUTF8Line('<a href="' + s + '">' + s + '</a>');
     Response.Stream.WriteUTF8Line('<br/>');
-    Response.Stream.WriteUTF8Line('</ui>');
+    Response.Stream.WriteUTF8Line('</li>');
   end;
 var
   s: string;
@@ -617,12 +642,12 @@ begin
     Response.Stream.WriteUTF8Line('<h4>Folders</h4>');
     Response.Stream.WriteUTF8Line('<ul>');
 
-    AddLink('..');
+    AddLink('..', True);
 
     for s in Files do
     begin
       if not StartsText('.', s) then
-        AddLink(s);
+        AddLink(s, True);
     end;
     Response.Stream.WriteUTF8Line('</ul>');
     Response.Stream.WriteUTF8Line('<h4>Files</h4>');
@@ -632,7 +657,7 @@ begin
     for s in Files do
     begin
       if not StartsText('.', s) then
-        AddLink(s);
+        AddLink(s, False);
     end;
     Response.Stream.WriteUTF8Line('</ul>');
     Response.Stream.WriteUTF8Line('</body>');
@@ -644,7 +669,7 @@ end;
 
 procedure WebServeFile(Response: TwebResponse; Request: TmodRequest; DefaultDocuments: TStringList; Options: TmodServeFiles);
 var
-  aDocument, aRequestDocument, aFile, aHomePath: string;
+  aDocument, aRequestDocument, aFile, aHomeFolder: string;
 
   {function FindDocument(Path: string; Smart: Boolean = False): Boolean;
   begin
@@ -654,7 +679,7 @@ var
     aPath := Path;
     // path = '' or '/' or './' or '../'
     if not ((aPath = '') or StartsDelimiter(aPath) or StartsStr('./', aPath) or StartsStr('../', aPath)) then //* some file or folder names starts with . like '.well-known/acme-challenge/'
-      aDocument := IncludePathDelimiter(aHomePath);
+      aDocument := IncludePathDelimiter(aHomeFolder);
     aDocument := ExpandFile(aDocument + aPath);
 
     Result := FileExists(aDocument) or DirectoryExists(aDocument);
@@ -673,11 +698,14 @@ begin
   '/web/dashbord/index.html' file
 
 *)
-  aHomePath := ExpandFile(CorrectPath(ExcludePathDelimiter(Response.HomePath)));
 
-  WebExpandFile(aHomePath, Request.Path, aRequestDocument, False);
+//-BUG: http://localhost:8080/doc/laz-logo.png/
 
-  if not WebExpandFile(aHomePath, Request.Path, aDocument, serveSmart in Options) then
+  aHomeFolder := ExpandFile(CorrectPath(ExcludePathDelimiter(Response.HomeFolder)));
+
+  WebExpandFile(aHomeFolder, Request.Path, aRequestDocument, False);
+
+  if not WebExpandFile(aHomeFolder, Request.Path, aDocument, serveSmart in Options) then
     Response.Answer := hrUnauthorized
   else if ((Request.Path = '') and not FileExists(aDocument)) or (not EndsDelimiter(aRequestDocument) and DirectoryExists(aRequestDocument)) then
   //                                                                  http://127.0.0.1:81/web  to   http://127.0.0.1:81/web/
@@ -692,7 +720,7 @@ begin
     //Response.SendHead(sHTTPProtocol1 + ' 301 Moved Permanently');
     Response.Answer := hrRedirect;
     //Response.SendHead(sHTTPProtocol1 + ' 307 Temporary Redirect');
-    Response.Location := IncludeURLDelimiter(Request.Address);
+    Response.Redirect := IncludeURLDelimiter(Request.Address);
     Response.SendHeader;
   end
   else
@@ -747,9 +775,14 @@ var
   aFileName: string;
 begin
   inherited;
-  Response.Stream.WriteCommand('OK');
   aFileName := Request.Params.Values['FileName'];
-  aFile := TFileStream.Create(Response.HomePath + aFileName, fmCreate);
+  aFileName := ExtractFileName(aFileName);
+  if aFileName = '' then
+  begin
+    Response.Answer := hrForbidden;
+    exit;
+  end;
+  aFile := TFileStream.Create(IncludeTrailingPathDelimiter(Response.HomeFolder) + aFileName, fmCreate);
   try
     Response.Stream.ReadStream(aFile, Request.ContentLength);
   finally
@@ -771,9 +804,14 @@ end;
 { TmodForwardHttpsCommand }
 
 procedure TmodForwardHttpsCommand.RespondResult(var Result: TmodRespondResult);
+var
+  aHost: string;
 begin
   inherited;
-  Response.RespondRedirectTo('https://'+Response.Request.Host + Response.Request.URI);
+  aHost := Response.Request.Host;
+  if (Module.Server.Port <> '') and (Module.Server.Port <> '443') then
+    aHost := aHost + ':' + Module.Server.Port;
+  Response.RespondRedirectTo('https://' + aHost + Response.Request.URI);
 end;
 
 { TmodDirCommand }
@@ -791,7 +829,7 @@ begin
   //aPath := IncludeTrailingPathDelimiter(Root);
   if aFilter = '' then
     aFilter := '*.*';
-   aStrings := TStringList.Create;
+  aStrings := TStringList.Create;
   try
     //EnumFileList(aPath + aFilter, aStrings);
     for i := 0 to aStrings.Count - 1 do
@@ -808,9 +846,17 @@ end;
 procedure TmodDeleteFileCommand.RespondResult(var Result: TmodRespondResult);
 var
   aFileName: string;
+  aSafeName: string;
 begin
   inherited;
-  aFileName := IncludeTrailingPathDelimiter(Response.HomePath) + Request.Path;
+  aFileName := Request.Path;
+  aSafeName := ExtractFileName(aFileName);
+  if (aSafeName = '') or (aSafeName <> aFileName) then
+  begin
+    Response.Answer := hrForbidden;
+    exit;
+  end;
+  aFileName := IncludeTrailingPathDelimiter(Response.HomeFolder) + aSafeName;
   if FileExists(aFileName) then
     DeleteFile(aFileName);
   Response.Stream.WriteCommand('OK');
@@ -853,12 +899,12 @@ end;
 
 { TWebServers }
 
-function TWebServers.AddServer(AName: string; AServer: TmodCustomWebServer;
+function TWebServers.AddServer(AName: string; AServer: TmodWebServer;
   OwnIt: Boolean): Integer;
 var
   item: TWebServerItem;
 begin
-  item := TWebServerItem.Create;;
+  item := TWebServerItem.Create;
   item.Name := AName;
   item.FServer := AServer;
   item.FOwnIt := OwnIt;
@@ -904,21 +950,14 @@ begin
   RegisterCommand('', TmodRedirectCommand, True);
 end;
 
-{ TmodWebServer }
-
-procedure TmodWebServer.Created;
-begin
-  inherited;
-end;
-
 { TmodAcmeChallengeServer }
 
-function TmodCustomWebServer.CreateModules: TmodModules;
+function TmodWebServer.CreateModules: TmodModules;
 begin
   Result := TmodWebModules.Create(Self);
 end;
 
-constructor TmodCustomWebServer.Create;
+constructor TmodWebServer.Create;
 begin
   inherited;
   Port := '80';
@@ -927,15 +966,15 @@ end;
 const
   sAcmeNameFolder = 'well-known';
 
-procedure TmodCustomWebServer.AddChallengeAcme(const AHomePath: string);
+procedure TmodWebServer.AddChallengeAcme(const AHomeFolder: string);
 begin
   if Modules.Find(sAcmeNameFolder) = nil then
   begin
     //* http://localhost/.well-known/acme-challenge/index.html
-    with TmodWebFileModule.Create(Modules, sAcmeNameFolder, '.' + sAcmeNameFolder) do
+    with TmodWebFileModule.Create(Self, sAcmeNameFolder, '.' + sAcmeNameFolder) do
     begin
       Level := -1;
-      HomePath := AHomePath;
+      HomeFolder := AHomeFolder;
     end;
     //* use certbot folder to "Application.Location + 'acme'" because certbot will create folder .well-known
   end;
@@ -944,46 +983,46 @@ end;
 const
   sForwardHttps = 'ForwardHttps';
 
-procedure TmodCustomWebServer.AddFileModule(const Alias: string; const AHomePath: string);
+procedure TmodWebServer.AddFileModule(const Alias: string; const AHomeFolder: string);
 begin
   if Modules.Find(Alias) = nil then
   begin
-    with TmodWebFileModule.Create(Modules, Alias, Alias) do
+    with TmodWebFileModule.Create(Self, Alias, Alias) do
     begin
       Level := -1;
-      HomePath := AHomePath;
+      HomeFolder := AHomeFolder;
     end;
   end;
 end;
 
-procedure TmodCustomWebServer.AddRedirectHttps;
+procedure TmodWebServer.AddRedirectHttps;
 begin
   if Modules.Find(sForwardHttps) = nil then
   begin
-    with TmodForwardHttpsModule.Create(Modules, sForwardHttps) do
+    with TmodForwardHttpsModule.Create(Self, sForwardHttps) do
     begin
         //Level := 0;
     end;
   end;
 end;
 
-procedure TmodCustomWebServer.SetFallbackRedirect(ToLocation: string);
+procedure TmodWebServer.SetFallbackRedirect(ToLocation: string);
 var
   aModule: TmodRedirectModule;
 begin
   aModule := Modules.Find<TmodRedirectModule>;
   if aModule = nil then
-    aModule := TmodRedirectModule.Create(Modules, 'redirect');
+    aModule := TmodRedirectModule.Create(Self, 'redirect');
   aModule.RedirectTo := ToLocation;
 end;
 
-procedure TmodCustomWebServer.SetNotfound;
+procedure TmodWebServer.SetNotfound;
 var
   aModule: TmodNotFoundModule;
 begin
   aModule := Modules.Find<TmodNotFoundModule>;
   if aModule = nil then
-    aModule := TmodNotFoundModule.Create(Modules, 'notfound');
+    TmodNotFoundModule.Create(Self, 'notfound');
 end;
 
 { TmodCustomWebModules }
@@ -992,7 +1031,7 @@ procedure TmodWebModules.ParseHead(ARequest: TmodRequest; const RequestLine: str
 begin
   inherited;
   //ARequest.ParsePath(ARequest.URI); duplicate in parse head :)
-  ARequest.Command := ARequest.Method;
+  ARequest.Command := ARequest.Method; //Default command name of not provided by child class
 end;
 
 {$ifndef FPC}
@@ -1013,7 +1052,7 @@ var
 begin
   inherited Create;
 
-  aModule := TmodWebEventModule.Create(Modules, 'web', 'doc');
+  aModule := TmodWebEventModule.Create(Self, 'web', 'doc');
   aModule.FProc := vProc;
 
   Port := vPort;
@@ -1040,14 +1079,21 @@ begin
 //  PutHeader('Access-Control-Allow-Headers', 'Origin, Accept, Accept-  Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, X-Response-Time, X-PINGOTHER, X-CSRF-Token,Authorization');
 //  PutHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
   Response.PutHeader('Access-Control-Allow-Method', 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS');
-  Response.PutHeader('Access-Control-Allow-Headers', 'X-PINGOTHER, Content-Type, Authorization, Accept, Origin');
+  Response.PutHeader('Access-Control-Allow-Headers', 'Location, Content-Type, Authorization, Accept, Origin, X-PINGOTHER');
   if (Module.Origins.Count = 0) then
-    Response.PutHeader('Access-Control-Allow-Origin', '*')
+  begin
+    if Response.Request.Host <> ''  then    
+      Response.PutHeader('Access-Control-Allow-Origin', Response.Request.Host)
+    else
+      Response.PutHeader('Access-Control-Allow-Origin', '*');
+  end
+  else if Module.Origins.IndexOf(Response.Request.Header['Origin']) >= 0 then
+    Response.PutHeader('Access-Control-Allow-Origin', Response.Request.Header['Origin'])
   else
     Response.PutHeader('Access-Control-Allow-Origin', Module.Origins.CommaText);
 end;
 
-function TmodWebModules.CreateRequest(Astream: TmnBufferStream): TmodRequest;
+function TmodWebModules.CreateRequest(AStream: TmnBufferStream): TmodRequest;
 begin
   Result := TwebRequest.Create(nil, Astream);
 end;
@@ -1070,7 +1116,5 @@ begin
 end;
 
 initialization
-  modLock := TCriticalSection.Create;
 finalization
-  FreeAndNil(modLock);
 end.

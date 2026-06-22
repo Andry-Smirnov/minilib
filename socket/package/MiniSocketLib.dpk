@@ -1,0 +1,49 @@
+package MiniSocketLib;
+
+{$R *.res}
+{$IFDEF IMPLICITBUILDING This IFDEF should not be used by users}
+{$ALIGN 8}
+{$ASSERTIONS OFF}
+{$BOOLEVAL OFF}
+{$DEBUGINFO OFF}
+{$EXTENDEDSYNTAX ON}
+{$IMPORTEDDATA ON}
+{$IOCHECKS OFF}
+{$LOCALSYMBOLS OFF}
+{$LONGSTRINGS ON}
+{$OPENSTRINGS ON}
+{$OPTIMIZATION OFF}
+{$OVERFLOWCHECKS OFF}
+{$RANGECHECKS OFF}
+{$REFERENCEINFO OFF}
+{$SAFEDIVIDE OFF}
+{$STACKFRAMES ON}
+{$TYPEDADDRESS OFF}
+{$VARSTRINGCHECKS ON}
+{$WRITEABLECONST ON}
+{$MINENUMSIZE 1}
+{$IMAGEBASE $400000}
+{$DEFINE DEBUG}
+{$ENDIF IMPLICITBUILDING}
+{$DESCRIPTION 'Mini Socket TCP/IP'}
+{$RUNONLY}
+{$IMPLICITBUILD OFF}
+
+requires
+  rtl,
+  vcl,
+  MiniCommonsLib;
+
+contains
+  mnSockets in '..\source\mnSockets.pas',
+  mnWinSockets in '..\source\mnWinSockets.pas',
+  mnServers in '..\source\mnServers.pas',
+  mnConnections in '..\source\mnConnections.pas',
+  mnModules in '..\source\mnModules.pas',
+  mnWebModules in '..\source\mnWebModules.pas',
+  mnClients in '..\source\mnClients.pas',
+  mnHttpClient in '..\source\mnHttpClient.pas',
+  mnIRCClients in '..\source\mnIRCClients.pas',
+  mnZKTClients in '..\source\mnZKTClients.pas';
+
+end.

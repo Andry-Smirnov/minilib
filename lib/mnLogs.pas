@@ -73,6 +73,7 @@ type
     procedure Write(const S: string; I: Integer); overload;
 
     property Enabled: Boolean read FEnabled write FEnabled;
+    procedure AppendToFile(const vFile, vText: utf8string); 
 //    property ForceLevel: TLogLevel read FForceLevel write FForceLevel; //nop some logs like files set to debug
   end;
 
@@ -139,6 +140,30 @@ var
   FLog: TLogDispatcher = nil;
   FShutdowning: Boolean = False;
 
+procedure TLogDispatcher.AppendToFile(const vFile, vText: utf8string); 
+var
+  aStream : TFileStream;
+  s: utf8string;
+begin
+//  ForceDirectories(ExtractFilePath(vFile));
+  try
+    if not FileExists(vFile) then
+      aStream := TFileStream.Create(vFile, fmCreate or fmOpenWrite or fmShareDenyNone)
+    else
+    begin
+      aStream := TFileStream.Create(vFile, fmOpenWrite or fmShareDenyNone);
+      aStream.Seek(LongInt(0), soFromEnd);
+    end;
+
+    aStream.Write(PByte(vText)^, ByteLength(vText));
+
+    s := #13#10;
+    aStream.Write(PByte(s)^, ByteLength(s));
+  finally
+    FreeAndNil(aStream);
+  end;
+end;
+  
 function Log: TLogDispatcher;
 begin
   if FShutdowning then

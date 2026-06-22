@@ -156,13 +156,13 @@ end;
 
 procedure TMain.HttpServerBeforeOpen(Sender: TObject);
 var
-  aAppPath, aHomePath: string;
+  aAppFolder, aHomeFolder: string;
   aDocModule: TmodWebModule;
   aHomeModule: THomeModule;
 begin
-  aHomePath := IncludePathDelimiter(HomePathEdit.Text);
-  if (LeftStr(aHomePath, 2)='.\') or (LeftStr(aHomePath, 2) = './') then
-    aHomePath := IncludePathDelimiter(ExtractFilePath(Application.ExeName) + Copy(aHomePath, 3, MaxInt));
+  aHomeFolder := IncludePathDelimiter(HomePathEdit.Text);
+  if (LeftStr(aHomeFolder, 2)='.\') or (LeftStr(aHomeFolder, 2) = './') then
+    aHomeFolder := IncludePathDelimiter(ExtractFilePath(Application.ExeName) + Copy(aHomeFolder, 3, MaxInt));
 
   HttpServer.Bind := BindEdit.Text;
   HttpServer.Port := PortEdit.Text;
@@ -170,7 +170,7 @@ begin
   begin
     //HttpServer.CertificateFile := Application.Location + '\acme\fullchain.pem';
     //HttpServer.PrivateKeyFile := Application.Location + '\acme\privkey.pem';
-    HttpServer.UseSSL := True;
+    HttpServer.IsSecure := True;
     HttpServer.CertificateFile := CertFile;
     HttpServer.CertPassword := CertPassword;
     HttpServer.PrivateKeyFile := PrivateKeyFile;
@@ -181,7 +181,7 @@ begin
   if aDocModule <> nil then
   begin
     aDocModule.AliasName := DocAliasEdit.Text;
-    aDocModule.HomePath := aHomePath;
+    aDocModule.HomeFolder := aHomeFolder;
     (aDocModule as TmodWebFileModule).ServeFiles:= [serveEnabled, serveIndex, serveDefault, serveSmart];
     //aDocModule.Use.AcceptCompressing := True;
     if CompressChk.Checked then
@@ -197,23 +197,22 @@ begin
   if aHomeModule <> nil then
   begin
     aHomeModule.AliasName := HomeAliasEdit.Text;
-    aAppPath := ExtractFilePath(Application.ExeName);
+    aAppFolder := ExtractFilePath(Application.ExeName);
 
-    //aHomeModule.IsSSL := HttpServer.UseSSL;
+    //aHomeModule.IsSSL := HttpServer.IsSecure;
     //aHomeModule.Domain := 'localhost';
     //aHomeModule.Port := HttpServer.Port;
-    aHomeModule.WebApp.IsLocal := True;
 //    aHomeModule.AssetsURL := '/' + aHomeModule.AliasName + '/assets/';
-    aHomeModule.HomePath := aHomePath;
-    aHomeModule.WorkPath := aAppPath;
+    aHomeModule.HomeFolder := aHomeFolder;
+    aHomeModule.WorkFolder := aAppFolder;
 
-    aHomeModule.WebApp.IsSSL := HttpServer.UseSSL;
-    aHomeModule.WebApp.AppPath := Application.Location;
-    //aHomeModule.WebApp.Assets.Logo.LoadFromFile(aHomeModule.HomePath + 'cs-v2.png');
-    aHomeModule.WebApp.Assets.Logo.LoadFromFile(aHomeModule.HomePath + 'cs.svg');
+    aHomeModule.Web.IsSecure := HttpServer.IsSecure;
+    aHomeModule.Web.AppFolder := Application.Location;
+    //aHomeModule.Web.Assets.Logo.LoadFromFile(aHomeModule.HomePath + 'cs-v2.png');
+    aHomeModule.Web.Assets.LogoFile := aHomeModule.HomeFolder + 'cs.svg';
 
-    ForceDirectories(aHomeModule.WorkPath + 'cache');
-    ForceDirectories(aHomeModule.WorkPath + 'temp');
+    ForceDirectories(aHomeModule.WorkFolder + 'cache');
+    ForceDirectories(aHomeModule.WorkFolder + 'temp');
 
     if CompressChk.Checked then
       aHomeModule.UseCompressing := ovUndefined
@@ -366,7 +365,7 @@ begin
     aIni.Free;
   end;
   FreeAndNil(WebServers);
-  UninstallEventLog(ServerLog);
+  //UninstallEventLog(ServerLog);
 end;
 
 procedure TMain.UpdateStatus;

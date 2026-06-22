@@ -120,19 +120,19 @@ type
     FIsReconnecting: Boolean;
     FDispatchers: TDBDispatchers;
     {$endif}
-    function GetNextID(const vName: string; vStep: Integer): Integer;
   protected
     procedure DoClone(vConn: TmncSQLConnection); virtual;
-    function DoGetNextIDSQL(const vName: string; vStep: Integer): string; virtual; deprecated; //TODO move it to dervied class should not be here, wrong place
+    function GetNextIDSQL(const vName: string; vStep: Integer): string; virtual; 
     function GetSequenceSQL: string; virtual;
     procedure DoExecute(const vSQL: string); virtual;
+    function DoCreateTransaction: TmncSQLTransaction; virtual; abstract;
   public
     constructor Create; override;
     destructor Destroy; override;
 
-    function CreateTransaction: TmncSQLTransaction; virtual; abstract;
+    function CreateTransaction: TmncSQLTransaction;
 
-    property NextID[const vName: string; vStep: Integer]: Integer read GetNextID; //deprecated;
+    function NextID(const vName: string; vStep: Integer): Int64;
 
     function IsDatabaseExists(const vName: string): Boolean; overload; virtual; abstract;
     function IsDatabaseExists: Boolean; overload;
@@ -170,8 +170,10 @@ type
     function ReceiveNotifications: TStrings; virtual;
     procedure Reconnect; virtual;
     procedure RecoverConnection; virtual;
+    
     procedure StartListen(const vChannel: string); virtual; deprecated;
     procedure StopListen(const vChannel: string); virtual; deprecated;
+    
     property Dispatchers: TDBDispatchers read FDispatchers;
     {$endif}
   end;
@@ -316,7 +318,7 @@ end;
 
 { TmncSQLTransaction }
 
-function TmncSQLConnection.DoGetNextIDSQL(const vName: string; vStep: Integer): string;
+function TmncSQLConnection.GetNextIDSQL(const vName: string; vStep: Integer): string;
 begin
   Result := '';
 end;
@@ -326,13 +328,13 @@ begin
   Result := '';
 end;
 
-function TmncSQLConnection.GetNextID(const vName: string; vStep: Integer): Integer;
+function TmncSQLConnection.NextID(const vName: string; vStep: Integer): Int64;
 var
   aCmd: TmncSQLCommand;
   aSQL: string;
   aTR: TmncSQLTransaction;
 begin
-  aSQL := DoGetNextIDSQL(vName, vStep);
+  aSQL := GetNextIDSQL(vName, vStep);
   if aSQL<>'' then
   begin
     aTR := CreateTransaction;
@@ -341,7 +343,7 @@ begin
       try
         aCmd.SQL.Text := aSQL;
         if aCmd.Execute then
-          Result := aCmd.Fields.Items[0].AsInteger
+          Result := aCmd.Fields.Items[0].AsInt64
         else
           Result := 0;
       finally
@@ -611,6 +613,11 @@ begin
   CreateDatabase(Resource, CheckExists);
 end;
 
+function TmncSQLConnection.CreateTransaction: TmncSQLTransaction;
+begin
+  Result := DoCreateTransaction;
+end;
+
 procedure TmncSQLConnection.DropDatabase(CheckExists: Boolean);
 begin
   DropDatabase(Resource, CheckExists);
@@ -742,7 +749,7 @@ function TmncSQLCommand.GetProcessedSQL: string;
 var
   i: Integer;
 begin
-  if cmdReplaceParams in Options then
+  if cmoReplaceParams in Options then
   begin
     Result := '';
     for i := 0 to ProcessedSQL.Count -1 do
@@ -919,9 +926,9 @@ begin
                   else if psoGenerateParams in SQLOptions then//if passed ? (ParamChar) without name of params
                   begin
                     sParamName := '_Param_' + IntToStr(iParam);
-                    Inc(iParam);
                     iCurState := DefaultState;
                     Add(iParam, sParamName);
+                    Inc(iParam);
                     sParamName := '';
                   end
                   else
@@ -949,16 +956,15 @@ begin
                   begin
                     Inc(i);
                     iCurState := DefaultState;
-                    if cmdReplaceParams in CMD.Options then
+                    if cmoReplaceParams in CMD.Options then
                     begin
                       //AddToSQL(IntToStr(iParam));
                     end
                     else if psoAddParamsID in SQLOptions then
-                    begin
                       AddToSQL(IntToStr(iParam));
-                      Inc(iParam);
-                    end;
                     Add(iParam, sParamName, Text.Length);
+                    if psoAddParamsID in SQLOptions then
+                      Inc(iParam);
                     sParamName := '';
                   end;
                 end;
@@ -1074,10 +1080,10 @@ begin
   if Count<>0 then
   begin
     st := DB.ReceiveNotifications;
+    if st <> nil then
     try
       if st.Count<>0 then
       begin
-        //for var s: stringex in st do
         while st.Count<>0 do
         begin
           i := st.Count-1;
@@ -1087,16 +1093,19 @@ begin
 
           for var itm in Self do
             if SameText(aName, itm.Channel) then
+            begin
               itm.FEvent(aValue, IntPtr(st.Objects[i]), aHandeled);
-              { TODO : improve: aHandeled := aHandeled or }
+              aHandeled := True;
+            end;
 
           if aHandeled then
           begin
             j := st.Count-1;
             while j>=0 do
             begin
-              if (SubStr(st[i], '=') = aName) then
-                Delete(i);
+              if SameText(st.Names[j], aName) then
+                st.Delete(j);
+              Dec(j);
             end;
           end
           else

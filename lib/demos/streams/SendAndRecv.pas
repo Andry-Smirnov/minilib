@@ -16,8 +16,8 @@ interface
 
 uses
   Classes, SysUtils, IniFiles,
-  mnUtils, mnStreams, mnMultipartData, mnHttpClient, mnWebModules, mnFields, mnHeaders,
-  mnModules,
+  mnTypes, mnUtils, mnStreams, mnHttpClient, mnWebModules, mnFields, mnHeaders,
+  mnModules, mnDON, mnClasses, mnMultipartData, 
   mnLogs, mnStreamUtils, mnSockets, mnClients, mnServers;
 
 {$ifdef GUI}
@@ -87,6 +87,7 @@ type
 
     procedure ExampleWriteFormData;
     procedure ExampleReadFormData;
+    procedure ExampleReadFormDataToJSON;
 
     procedure ExampleWriteReadWSFile;
     procedure ExampleWebSocket;
@@ -131,7 +132,7 @@ type
     CancelAfter: Boolean;
     KeepAlive: Boolean;
     WaitBeforeRead: Boolean;
-    UseSSL: Boolean;
+    IsSecure: Boolean;
     QuickAck: Boolean;
     TestTimeOut: Longint;// = -1;
     SocketOptions: TmnsoOptions; //soWaitBeforeRead
@@ -166,7 +167,7 @@ begin
       Stream.Options := Stream.Options + [soKeepAlive];
     if info.QuickAck then
       Stream.Options := Stream.Options + [soQuickAck];
-    if info.UseSSL then
+    if info.IsSecure then
       Stream.Options := Stream.Options + [soSSL];
 
     if info.EndOfLine<>'' then
@@ -217,7 +218,7 @@ begin
       Stream.Options := Stream.Options + [soKeepAlive];
     if info.QuickAck then
       Stream.Options := Stream.Options + [soQuickAck];
-    if info.UseSSL then
+    if info.IsSecure then
       Stream.Options := Stream.Options + [soSSL];
     try
       t := TThread.GetTickCount;
@@ -523,7 +524,7 @@ begin
   Info.KeepAlive := Pos('k', S) > 0;
   Info.QuickAck := Pos('q', S) > 0;
   Info.WaitBeforeRead := Pos('w', S) > 0;
-  Info.UseSSL := Pos('s', S) > 0;
+  Info.IsSecure := Pos('s', S) > 0;
   Info.TestTimeOut := 1000;
   Info.CancelAfter := False;
 
@@ -545,7 +546,7 @@ begin
   Info.KeepAlive := False;
   Info.QuickAck := False;
   Info.WaitBeforeRead := True;
-  Info.UseSSL := False;
+  Info.IsSecure := False;
   Info.TestTimeOut := 100;
   Info.CancelAfter := False;
 
@@ -566,7 +567,7 @@ begin
   Info.Nagle := False;
   Info.KeepAlive := False;
   Info.QuickAck := False;
-  Info.UseSSL := False;
+  Info.IsSecure := False;
   try
     Stream := TmnClientSocket.Create('c.tile.openstreetmap.org', '443');
     Stream.ReadTimeout := Info.TestTimeOut;
@@ -629,7 +630,7 @@ begin
   Info.Nagle := False;
   Info.KeepAlive := False;
   Info.QuickAck := False;
-  Info.UseSSL := False;
+  Info.IsSecure := False;
   Info.TestTimeOut := 1000;
   Info.CancelAfter := False;
   InternalExampleSocket(true, true);
@@ -640,7 +641,7 @@ begin
   Info.Nagle := False;
   Info.KeepAlive := False;
   Info.QuickAck := False;
-  Info.UseSSL := False;
+  Info.IsSecure := False;
   Info.TestTimeOut := 1000;
   Info.CancelAfter := True;
   InternalExampleSocket(true, true);
@@ -680,7 +681,7 @@ begin
   Info.Nagle := False;
   Info.KeepAlive := False;
   Info.QuickAck := False;
-  Info.UseSSL := False;
+  Info.IsSecure := False;
   try
     Stream := TmnClientSocket.Create('echo.websocket.org', '443');
 //    Stream := TmnClientSocket.Create('localhost', '8080');
@@ -760,19 +761,18 @@ var
   m: TMemoryStream;
   Stream: TmnBufferStream;
   aFormData: TmnMultipartData;
-  aItm: TmnMultipartDataItem;
+  aItm: TDON_Pair;
 begin
   m := TMemoryStream.Create;
   Stream := TmnWrapperStream.Create(m, False);
   try
-    Stream.EndOfLine := sWinEndOfLine;
-    aFormData := TmnMultipartData.Create;
+    Stream.EndOfLine := sWinEndOfLine;    
+    aFormData := TmnMultipartData.Create(nil);
     try
       aFormData.Boundary := TGUID.NewGuid.ToString;
 //      TmnMultipartDataValue.Create(aFormData).Value := 'test@code.com';
-      TmnMultipartDataFileName.Create(aFormData).FileName := 'image.jpg';
-
-      aFormData.Write(Stream);
+//      TmnMultipartDataFileName.Create(aFormData).FileName := 'image.jpg';
+//      aFormData.Write(Stream);
     finally
       FreeAndNil(aFormData);
     end;
@@ -1062,7 +1062,7 @@ begin
       Writeln('<'+h.GetNameValue);
 
     Writeln('');
-    for h in c.Respond.Header do
+    for h in c.Response.Header do
       Writeln('>'+h.GetNameValue);
     Writeln(s);
 //    Writeln(c.Respond.StatusCode.ToString);
@@ -1098,7 +1098,7 @@ begin
       Writeln('<'+h.GetNameValue);
 
     Writeln('');
-    for h in c.Respond.Header do
+    for h in c.Response.Header do
       Writeln('>'+h.GetNameValue);
 
     Writeln('');
@@ -1138,7 +1138,7 @@ begin
       Writeln('<'+h.GetNameValue);
 
     Writeln('');
-    for h in c.Respond.Header do
+    for h in c.Response.Header do
       Writeln('>'+h.GetNameValue);
 
     Writeln('');
@@ -1154,25 +1154,59 @@ var
   aTextFile: TFileStream;
   Stream: TmnBufferStream;
   aFormData: TmnMultipartData;
-  aItm: TmnMultipartDataItem;
-  h: TmnField;
+  aItm: TDON_Pair;
+  h: TDON_Pair;
 begin
-  aTextFile:=TFileStream.Create(Location + 'test\formdata_noheader.txt', fmOpenRead or fmShareDenyWrite);
+  aTextFile := TFileStream.Create(Location + 'test\formdata_noheader.txt', fmOpenRead or fmShareDenyWrite);
   Stream := TmnWrapperStream.Create(aTextFile, True);
   try
     Stream.EndOfLine := sWinEndOfLine;
-    aFormData := TmnMultipartData.Create;
+    aFormData := TmnMultipartData.Create(nil);
     aFormData.Boundary := '---------------------------9051914041544843365972754266';
     try
       //aFormData.Read(Stream);
       aFormData.Read(Stream);
       for aItm in aFormData do
       begin
-        for h in aItm.Header do
+///        for h in aItm do
+///          Writeln('>'+h.GetNameValue);
+        Writeln(aItm.Name);
+      end;
+
+    finally
+      FreeAndNil(aFormData);
+    end;
+  finally
+    Stream.Free;
+  end;
+end;
+
+procedure TTestStream.ExampleReadFormDataToJSON;
+var
+  aTextFile: TFileStream;
+  Stream: TmnBufferStream;
+  aFormData: TmnMultipartData;
+  aItm: TDON_Pair;
+  h: TmnField;
+begin
+  aTextFile := TFileStream.Create(Location + 'test\formdata_noheader.txt', fmOpenRead or fmShareDenyWrite);
+  Stream := TmnWrapperStream.Create(aTextFile, True);
+  try
+    Stream.EndOfLine := sWinEndOfLine;
+    aFormData := TmnMultipartData.Create(nil);
+    aFormData.OutputPath := Location + 'test\';
+    aFormData.ShortFileNames := True;
+    aFormData.Boundary := '---------------------------9051914041544843365972754266';
+    try
+      aFormData.Read(Stream);
+      for aItm in aFormData do
+      begin
+        for h in (aItm as TMPDItem).Header do
           Writeln('>'+h.GetNameValue);
         Writeln(aItm.Name);
       end;
 
+      JsonSaveFile(aFormData, Location + 'test\formdata-output.json');
     finally
       FreeAndNil(aFormData);
     end;
@@ -1277,7 +1311,7 @@ begin
 
 
     Writeln('');
-    for h in c.Respond.Header do
+    for h in c.Response.Header do
       Writeln('>'+h.GetNameValue);
     Writeln(s);
 
@@ -1450,7 +1484,7 @@ begin
   Info.KeepAlive := False;
   Info.QuickAck := False;
   Info.WaitBeforeRead := True;
-  Info.UseSSL := False;
+  Info.IsSecure := False;
   Info.TestTimeOut := -1;
   Info.CancelAfter := False;
   Info.EndOfLine := #$D#$A;
@@ -1468,7 +1502,7 @@ begin
   Info.KeepAlive := False;
   Info.QuickAck := False;
   Info.WaitBeforeRead := True;
-  Info.UseSSL := True;
+  Info.IsSecure := True;
   Info.TestTimeOut := -1;
   Info.CancelAfter := False;
   Info.EndOfLine := #$D#$A;
@@ -1731,6 +1765,7 @@ begin
 
       AddProc('[form]Write FormData', ExampleWriteFormData);
       AddProc('[form]Read FormData', ExampleReadFormData);
+      AddProc('[form]Read FormData to JSON', ExampleReadFormDataToJSON);      
 
       AddProc('SmallBuffer: read write line with small buffer', ExampleSmallBuffer);
       AddProc('CopyHexImage: Hex image2 images and read one', ExampleCopyHexImage);
@@ -1857,7 +1892,7 @@ begin
   Writeln('== Respond ==');
   Writeln('');
 
-  for h in Respond.Header do
+  for h in Response.Header do
     Writeln('>'+h.GetNameValue);
 
   Writeln('');

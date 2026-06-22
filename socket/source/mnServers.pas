@@ -75,7 +75,7 @@ type
   private
     FRemoteIP: string;
     FStream: TmnConnectionStream;
-    FIsSSL: Boolean;
+    FIsSecure: Boolean;
     function GetListener: TmnListener;
   protected
     function GetConnected: Boolean; override;
@@ -89,7 +89,7 @@ type
     property Stream: TmnConnectionStream read FStream;
     property Listener: TmnListener read GetListener;
     property RemoteIP: string read FRemoteIP;
-    property IsSSL: Boolean read FIsSSL;
+    property IsSecure: Boolean read FIsSecure;
   end;
 
   TmnServerConnectionClass = class of TmnServerConnection;
@@ -174,7 +174,7 @@ type
     FBind: string;
     FListener: TmnListener;
     FLogging: Boolean;
-    FUseSSL: Boolean;
+    FIsSecure: Boolean;
     FIdleTick: UInt64;
     FIdleInterval: Int64;
     procedure SetActive(const Value: Boolean);
@@ -227,7 +227,7 @@ type
     property Port: string read FPort write SetPort;
     property Bind: string read FBind write SetBind;
     property Address: string read FBind write SetBind;//Deprecated
-    property UseSSL: Boolean read FUseSSL write FUseSSL;
+    property IsSecure: Boolean read FIsSecure write FIsSecure;
 
     property Active: boolean read FActive write SetActive default False;
     property Started: boolean read FActive write SetActive default False;
@@ -532,19 +532,18 @@ end;
 function TmnListener.AcceptSocket(Socket: TmnCustomSocket): TmnServerConnection;
 begin
   //check to make this in new thread
-  Result := nil;
-
-  if Socket=nil then
+  if Socket = nil then
     raise EmnStreamException.CreateFmt('socket is null', []);
 
   try
     Result := CreateConnection(Socket) as TmnServerConnection;
     Result.FRemoteIP := Socket.GetRemoteAddress;
-    Result.FIsSSL := soSSL in Socket.Options;
+    Result.FIsSecure := soSSL in Socket.Options;
   except
     on E: Exception do
     begin
       Log(E.Message);
+      Socket.Free;
       Result := nil;
     end;
   end;
@@ -615,7 +614,7 @@ begin
   Result := TmnSocketStream.Create(vSocket);
   //TmnSocketStream(Result).Options := TmnSocketStream(Result).Options + Options;
   TmnSocketStream(Result).Options := Options;
-  if FServer.UseSSL then
+  if FServer.IsSecure then
     TmnSocketStream(Result).Options := TmnSocketStream(Result).Options + [soSSL]; //TODO i think it should in listener options too
 end;
 
@@ -686,6 +685,7 @@ begin
     Event.SetEvent;
     while Connected and not Terminated do
     begin
+      aSocket := nil;
       try
         if (Socket.Select(Timeout, slRead) = erSuccess) and not Terminated then
         begin
@@ -729,7 +729,7 @@ begin
           else
           begin
             aConnection := AcceptSocket(aSocket);
-            if aConnection<>nil then
+            if aConnection <> nil then
               aConnection.Start;
           end;
           {w.Stop;
@@ -776,8 +776,7 @@ begin
   if (GetTickCount64-FLastCheck)>sChangeInterval then
   begin
     FLastCheck := GetTickCount64;
-    FileAge(CertificateFile, aDate, True);
-    if CertificateFileDate<>aDate then
+    if FileAge(CertificateFile, aDate, True) and (CertificateFileDate <> aDate) then
     begin
       ReloadContext;
     end;
@@ -858,17 +857,21 @@ begin
     Leave;
   end;
 
-  try
-    while List.Count > 0 do
-    begin
+  while True do
+  begin
+    Enter;
+    try
+      if List.Count = 0 then
+        break;
       aConnection := List[0];
-      aConnection.Terminate;
-      aConnection.WaitFor;
-      //Log('Connection Stopped #' + IntToStr(aConnection.ID));
-      aConnection.Free;
       List.Delete(0);
+    finally
+      Leave;
     end;
-  finally
+    aConnection.Terminate;
+    aConnection.WaitFor;
+    //Log('Connection Stopped #' + IntToStr(aConnection.ID));
+    aConnection.Free;
   end;
 end;
 
@@ -949,37 +952,34 @@ procedure TmnServer.Start(WaitToStart: Boolean);
 begin
   if (FListener = nil) then // if its already active, dont start again
   begin
+    DoBeforeOpen; //* Init/read/load config values
+    DoStarting; //* more init values from read config
+    if IsSecure then
+      InitOpenSSL;
+    FListener := CreateListener;
     try
-      DoBeforeOpen; //* Init/read/load config values
-      DoStarting; //* more init values from read config
-      if UseSSL then
-        InitOpenSSL;
-      FListener := CreateListener;
-      try
-        FListener.FServer := Self;
-        FListener.FPort := FPort;
-        FListener.FAddress := FBind;
-        if UseSSL then
-          FListener.FOptions := FListener.FOptions + [soSSL, soWaitBeforeRead];
-        FListener.CertificateFile := CertificateFile;
-        FListener.CertPassword := CertPassword;
-        FListener.PrivateKeyFile := PrivateKeyFile;
+      FListener.FServer := Self;
+      FListener.FPort := FPort;
+      FListener.FAddress := FBind;
+      if IsSecure then
+        FListener.FOptions := FListener.FOptions + [soSSL, soWaitBeforeRead];
+      FListener.CertificateFile := CertificateFile;
+      FListener.CertPassword := CertPassword;
+      FListener.PrivateKeyFile := PrivateKeyFile;
 
-        FListener.Prepare;
-        //FListener.Timeout := 500;
-        DoStart;
-        FListener.Start;
-        if WaitToStart then
-          WaitStartedEvent;
-        FActive := True;
-      except
-        FreeAndNil(FListener); //case error because delphi call terminateset on free
-        raise;
-      end;
-      if Active then
-        DoAfterOpen;
-    finally
+      FListener.Prepare;
+      //FListener.Timeout := 500;
+      DoStart;
+      FListener.Start;
+      if WaitToStart then
+        WaitStartedEvent;
+      FActive := True;
+    except
+      FreeAndNil(FListener); //case error because delphi call terminateset on free
+      raise;
     end;
+    if Active then
+      DoAfterOpen;
   end;
 end;
 
@@ -1095,9 +1095,10 @@ end;
 
 procedure TmnServerSocket.SetAddress(Value: string);
 begin
-  if FAddress = Value then Exit;
+  if FAddress = Value then 
+	Exit;
   if Connected then
-    raise EmnException.Create('Can not change Port value when active');
+    raise EmnException.Create('Can not change Address value when active');
   FAddress := Value;
 end;
 

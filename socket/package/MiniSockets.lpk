@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <Package Version="5">
+    <PathDelim Value="\"/>
+    <Name Value="MiniSockets"/>
+    <Author Value="Zaher Dirkey, Belal Hamad"/>
+    <CompilerOptions>
+      <Version Value="11"/>
+      <PathDelim Value="\"/>
+      <SearchPaths>
+        <OtherUnitFiles Value="..\source"/>
+        <UnitOutputDirectory Value="..\units\$(TargetCPU)-$(TargetOS)"/>
+      </SearchPaths>
+      <Parsing>
+        <SyntaxOptions>
+          <SyntaxMode Value="Delphi"/>
+          <UseAnsiStrings Value="False"/>
+        </SyntaxOptions>
+      </Parsing>
+      <Linking>
+        <Debugging>
+          <DebugInfoType Value="dsDwarf3"/>
+        </Debugging>
+      </Linking>
+      <Other>
+        <CompilerMessages>
+          <IgnoredMessages idx5024="True"/>
+        </CompilerMessages>
+      </Other>
+    </CompilerOptions>
+    <Description Value="Socket wrapper"/>
+    <Version Major="1" Release="3" Build="7"/>
+    <Files>
+      <Item>
+        <Filename Value="..\source\mnServers.pas"/>
+        <AddToUsesPkgSection Value="False"/>
+        <UnitName Value="mnServers"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnClients.pas"/>
+        <UnitName Value="mnClients"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnSockets.pas"/>
+        <UnitName Value="mnSockets"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnIRCClients.pas"/>
+        <UnitName Value="mnIRCClients"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnHttpServer.pas"/>
+        <UnitName Value="mnHttpServer"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnModules.pas"/>
+        <UnitName Value="mnModules"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnOpenSSLAPI.pas"/>
+        <UnitName Value="mnOpenSSLAPI"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnOpenSSL.pas"/>
+        <UnitName Value="mnOpenSSL"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnZKTClients.pas"/>
+        <UnitName Value="mnZKTClients"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnHttpClient.pas"/>
+        <UnitName Value="mnHttpClient"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnWebModules.pas"/>
+        <UnitName Value="mnWebModules"/>
+      </Item>
+      <Item>
+        <Filename Value="..\source\mnConnections.pas"/>
+        <AddToUsesPkgSection Value="False"/>
+        <UnitName Value="mnConnections"/>
+      </Item>
+    </Files>
+    <RequiredPkgs>
+      <Item>
+        <PackageName Value="MiniLib"/>
+      </Item>
+    </RequiredPkgs>
+    <UsageOptions>
+      <UnitPath Value="$(PkgOutDir)"/>
+    </UsageOptions>
+    <PublishOptions>
+      <Version Value="2"/>
+    </PublishOptions>
+  </Package>
+</CONFIG>

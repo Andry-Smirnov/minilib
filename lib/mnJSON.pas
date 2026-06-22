@@ -1,15 +1,13 @@
 unit mnJSON;
 { **
   *  JSON Parser
-  *    without object tree
+  *  Without object tree, see DON
   *
   *  This file is part of the "Mini Library"
   *
-  * @license   The MIT License (MIT)
+  * @license   The MIT License (MIT)  *
   *
-  *            See the file COPYING.MLGPL, included in this distribution,
   * @author    Zaher Dirkey <zaher, zaherdirkey>
-  * @author    Belal AlHamad
   *
   * }
 
@@ -43,24 +41,36 @@ uses
 
 type
   TJSONParseOption = (
-    jsoStrict,
-    jsoNoDuplicate,//TODO do not allow duplicate names
-    jsoSafe, //no Exceptions
-    jsoUTF8 //TODO , no, always UTF8
+    jsoModern, //* JSON5 compatiple (as possible
+    jsoModernPlus, //* JSON5 compatiple (as possible
+//    jsoComments, //* Read comment in object tree, do not skip it, now in Modern
+    jsoSafe //* No Exceptions
   );
   TJSONParseOptions = set of TJSONParseOption;
 
-  TmnJsonAcquireType = (
-    aqPair,
-    aqObject,
-    aqArray,
+  TmnJsonType = (
+    aqComment,
     aqString,
     aqIdentifier,
     aqNumber,
-    aqBoolean
+    aqBoolean,
+    aqArray,
+    aqPair,
+    aqObject
   );
 
-  TmnJsonAcquireProc = procedure(AParentObject: TObject; const Value: String; const ValueType: TmnJsonAcquireType; out AObject: TObject);
+  TmnJsonStringOptions = set of (
+    jtoSingleQuote,
+    jtoBackQuote,
+    jtoMultiLine
+  );
+
+  TmnJsonStringType = record
+    Name: string;
+    Options: TmnJsonStringOptions;
+  end;
+
+  TmnJsonAcquireProc = procedure(out AObject: TObject; AParentObject: TObject; const Value: String; const ValueType: TmnJsonType; const StringOptions: TmnJsonStringType);
 
   { TmnJSONParser }
 
@@ -69,7 +79,13 @@ type
     type
       TState = (stNone, stOpen);
 
-      TExpect = (exValue, exName, exAssign, exNext, exEnd);
+      TExpect = (
+        exValue,
+        exName,
+        exAssign, // :
+        exNext,   // ,
+        exEnd     // End of line
+      );
       TExpects = set of TExpect;
 
       TContext = (
@@ -81,16 +97,17 @@ type
 
       TToken = (
         tkNone,
-        tkDQString,
-        tkSQString,
+        tkDoubleQuoteString,  //Double Quote "
+        tkSingleQuoteString,  //Single Quote '
+        tkBackQuoteString,  //Back Quote `
+        tkBackQuoteType,    // Example `SQL select * from employees
         tkEscape,
-        tkEscapeChar,
+        tkEscapeHex,
         tkNumber,
         tkIdentifire,
         tkCommentOpen,
-        tkSLComment,
-        tkMLComment,
-        tkReturn //End of line to escape #10
+        tkSingleLineComment,
+        tkMultiLineComment
       );
 
       TStackItem = record
@@ -100,6 +117,28 @@ type
       end;
 
       TStack = array of TStackItem;
+
+      { TStringCollector }
+
+      TStringCollector = record
+      public
+        Name: string; //Type name
+        Token: TToken;
+        Started: Integer;
+        Buffer: UTF8String;
+        BufferLen: Integer;
+        Escape: UTF8String;
+        EscapeLength: Integer;
+        IsMultiLine: Boolean;
+        procedure Reset(AIndex: Integer; AToken: TToken); inline;
+        procedure Append(const s: UTF8String); inline;
+        procedure AppendChar(Ch: AnsiChar); inline;
+        //* Take partial content
+        procedure Collect(const Content: PByte; Index: Integer); inline;
+        function GetSize(Index: Integer): Integer; inline;
+        function GetStringOptions: TmnJsonStringType; inline;
+        procedure FlushBuffer; inline;
+      end;
 
     var
       AcquireProc: TmnJsonAcquireProc;
@@ -117,10 +156,11 @@ type
 
       Token: TToken;
 
-      TokenString: TToken;
-      StartString: Integer;
-      StringBuffer: UTF8String;
-      EscapeBuffer: UTF8String;
+      Collector: TStringCollector;
+
+      CommentStarted: Integer;
+      CommentBuffer: UTF8String;
+      Comments: array of string;
 
       Index: Integer;
       Options: TJSONParseOptions;
@@ -133,31 +173,152 @@ type
     procedure CheckExpected(AExpected: TExpects; AContexts: TContexts = [cxPair, cxArray]); inline;
     procedure Error(const Msg: string); inline;
     procedure ErrorNotExpected(AExpected: TExpects; AContexts: TContexts = [cxPair, cxArray]); //not inline
+    procedure NewLine; inline;
   public
+    //Always Init and Finish
     procedure Init(AParent: TObject; vAcquireProc: TmnJsonAcquireProc; vOptions: TJSONParseOptions);
-    procedure Parse(const Content: PByte; Size: Integer; Start: Integer = 0); overload;
+    procedure Parse(const Content: PByte; Size: Integer; From: Integer = 0); overload;
     procedure Parse(const Content: UTF8String); overload;
     procedure Finish;
   end;
 
 procedure JsonParseCallback(const Content: UTF8String; out Error: string; AParent: TObject; const AcquireProc: TmnJsonAcquireProc; vOptions: TJSONParseOptions);
-function JsonLintFile(const FileName: string; Options: TJSONParseOptions = []): string; //Return Error message
+function JsonLintString(const S: string; Options: TJSONParseOptions = []): string; //Return Error message
+//For testing
+function JsonLintChunks(const Content: string; Options: TJSONParseOptions = []; ChunkSize: Integer =3): string; //Return Error message
 
 implementation
 
-const
-  sNumberChars = ['.', '-', '+',
-                  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-                  'a', 'b', 'c', 'd', 'e', 'f', 'h', 'x',
-                  'A', 'B', 'C', 'D', 'E', 'F', 'H', 'X'
-                 ];
+var
+  cNumberChar: array[Byte] of Boolean;
+  cHexChar: array[Byte] of Boolean;
+  cIdentChar: array[Byte] of Boolean;
+
+procedure InitCharTables;
+var
+  C: AnsiChar;
+begin
+  FillChar(cNumberChar, SizeOf(cNumberChar), 0);
+  FillChar(cHexChar, SizeOf(cHexChar), 0);
+  FillChar(cIdentChar, SizeOf(cIdentChar), 0);
+
+  for C := '0' to '9' do
+  begin
+    cNumberChar[Byte(C)] := True;
+    cHexChar[Byte(C)] := True;
+    cIdentChar[Byte(C)] := True;
+  end;
+
+  for C := 'a' to 'z' do
+  begin
+    cIdentChar[Byte(C)] := True;
+    case C of
+      'a'..'f': cHexChar[Byte(C)] := True;
+    end;
+  end;
+
+  for C := 'A' to 'Z' do
+  begin
+    cIdentChar[Byte(C)] := True;
+    case C of
+      'A'..'F': cHexChar[Byte(C)] := True;
+    end;
+  end;
+
+  cNumberChar[Byte('.')] := True;
+  cNumberChar[Byte('-')] := True;
+  cNumberChar[Byte('+')] := True;
+  cNumberChar[Byte('a')] := True; cNumberChar[Byte('b')] := True; cNumberChar[Byte('c')] := True;
+  cNumberChar[Byte('d')] := True; cNumberChar[Byte('e')] := True; cNumberChar[Byte('f')] := True;
+  cNumberChar[Byte('h')] := True; cNumberChar[Byte('x')] := True;
+  cNumberChar[Byte('A')] := True; cNumberChar[Byte('B')] := True; cNumberChar[Byte('C')] := True;
+  cNumberChar[Byte('D')] := True; cNumberChar[Byte('E')] := True; cNumberChar[Byte('F')] := True;
+  cNumberChar[Byte('H')] := True; cNumberChar[Byte('X')] := True;
+
+  cIdentChar[Byte('_')] := True;
+end;
+
+{ TStringCollector }
+
+procedure TmnJSONParser.TStringCollector.FlushBuffer;
+begin
+  if BufferLen <> Length(Buffer) then
+    SetLength(Buffer, BufferLen);
+end;
+
+procedure TmnJSONParser.TStringCollector.Reset(AIndex: Integer; AToken: TToken);
+begin
+  Token := AToken;
+  Started := AIndex;
+  BufferLen := 0;
+  Escape := '';
+  EscapeLength := 2;
+  IsMultiLine := False;
+end;
+
+procedure TmnJSONParser.TStringCollector.Append(const s: UTF8String);
+var
+  L, NewLen: Integer;
+begin
+  L := Length(s);
+  if L = 0 then
+    Exit;
+  NewLen := BufferLen + L;
+  if NewLen > Length(Buffer) then
+    SetLength(Buffer, NewLen * 2);
+  Move(s[1], Buffer[BufferLen + 1], L);
+  Inc(BufferLen, L);
+end;
+
+procedure TmnJSONParser.TStringCollector.AppendChar(Ch: AnsiChar);
+var
+  NewLen: Integer;
+begin
+  NewLen := BufferLen + 1;
+  if NewLen > Length(Buffer) then
+    SetLength(Buffer, NewLen * 2);
+  Buffer[NewLen] := Ch;
+  BufferLen := NewLen;
+end;
+
+procedure TmnJSONParser.TStringCollector.Collect(const Content: PByte; Index: Integer);
+var
+  Count, NewLen: Integer;
+begin
+  Count := Index - Started;
+  if Count <= 0 then
+    Exit;
+  NewLen := BufferLen + Count;
+  if NewLen > Length(Buffer) then
+    SetLength(Buffer, NewLen * 2);
+  Move(Content[Started], Buffer[BufferLen + 1], Count);
+  Inc(BufferLen, Count);
+end;
+
+function TmnJSONParser.TStringCollector.GetSize(Index: Integer): Integer;
+begin
+  Result := Index - Started;
+end;
+
+function TmnJSONParser.TStringCollector.GetStringOptions: TmnJsonStringType;
+begin
+  Result.Name := Name;
+  if Token = tkSingleQuoteString then
+    Result.Options := [jtoSingleQuote]
+  else if Token = tkBackQuoteString then
+    Result.Options := [jtoSingleQuote, jtoBackQuote]
+  else
+    Result.Options := [];
+  if IsMultiLine then
+    Include(Result.Options, jtoMultiLine);
+end;
 
 procedure TmnJSONParser.RaiseError(AError: string; Line: Integer = 0; Column: Integer = 0);
 begin
   if Line > 0 then
-    ErrorMessage := AError + ' :: line: ' + Line.ToString + ', column: ' + Column.ToString
+    ErrorMessage := AError + ' [line: ' + Line.ToString + ', column: ' + Column.ToString+']'
   else
-    ErrorMessage := AError + ' :: column: '+ Column.ToString;
+    ErrorMessage := AError + ' [column: '+ Column.ToString+']';
 
   if not (jsoSafe in Options) then
     raise Exception.Create(ErrorMessage)
@@ -175,10 +336,10 @@ begin
   begin
     Result := 'Expected';
     case Expect of
-      exName: Result := Result + ' name';
-      exValue: Result := Result + ' value';
-      exAssign: Result := Result + ' colon `:`';
-      exNext: Result := Result + ' comma `,`';
+      exName: Result := Result + ' a Name';
+      exValue: Result := Result + ' a Value';
+      exAssign: Result := Result + ' a Colon `:`';
+      exNext: Result := Result + ' a Comma `,`';
       exEnd:;
     end;
 
@@ -193,8 +354,13 @@ begin
       Error('Expected in Array')
     else
       Error('Expected in Pairs');
-    Error(Result);
   end;
+end;
+
+procedure TmnJSONParser.NewLine; 
+begin
+  inc(LineNumber);
+  ColumnNumber := 1;
 end;
 
 procedure TmnJSONParser.Push; {$ifdef FPC} inline; {$endif}
@@ -203,11 +369,11 @@ begin
   Writeln(Format('%0.4d ', [LineNumber])+ RepeatString('    ', Length(Stack))+ 'Push '+ TRttiEnumerationType.GetName(Context)+ ' ' +TRttiEnumerationType.GetName(Expect));
   {$endif}
   if StackIndex >= Length(Stack) then
-    SetLength(Stack, StackIndex + 1);
+    SetLength(Stack, Length(Stack) * 2);
   Stack[StackIndex].Parent := Parent;
   Stack[StackIndex].Context := Context;
   Stack[StackIndex].State := State;
-  StackIndex := StackIndex + 1;
+  Inc(StackIndex);
 end;
 
 procedure TmnJSONParser.Next;
@@ -259,7 +425,8 @@ begin
     end
   end
   else if (Expect <> exEnd) then
-    Error('Expected EOF');
+    CheckExpected([exEnd], [Context]);
+    //Error('Expected EOF');
 end;
 
 procedure TmnJSONParser.Parse(const Content: UTF8String);
@@ -274,53 +441,54 @@ begin
     Error('Expected EOF');
     exit;
   end;
-  Parent := Stack[StackIndex-1].Parent;
-  Context := Stack[StackIndex-1].Context;
-  State := Stack[StackIndex-1].State;
-  StackIndex := StackIndex - 1;
+  Dec(StackIndex);
+  Parent := Stack[StackIndex].Parent;
+  Context := Stack[StackIndex].Context;
+  State := Stack[StackIndex].State;
   {$ifdef verbose}
   Writeln(Format('%0.4d ', [LineNumber])+RepeatString('    ', Length(Stack)) + 'Pop '+ TRttiEnumerationType.GetName(Context) +' '+TRttiEnumerationType.GetName(Expect));
   {$endif}
 end;
 
-procedure TmnJSONParser.Parse(const Content: PByte; Size: Integer; Start: Integer = 0);
+procedure TmnJSONParser.Parse(const Content: PByte; Size: Integer; From: Integer = 0);
 var
   Ch: UTF8Char;
   AObject: TObject;
 
-  function CopyString(const Value: PByte; Start, Count: Integer): String; {$ifndef DEBUG}inline; {$endif}
-  begin
-    if Count = 0 then
-      Result := ''
-    else
-    begin
-      //Result := TEncoding.UTF8.GetString(Value, Start, Count);
-      {$ifdef FPC}
-      SetLength(Result, Count);
-      CopyMemory(@Result[1], @Value[Start], Count);
-      {$else}
-      Result := TEncoding.UTF8.GetString(Value, Start, Count);
-      {$endif}
-    end;
-  end;
-
   procedure ContinueString;
   begin
-    if (jsoStrict in Options) then
-    begin
-      if CharInSet(Ch, [#0, #10, #13]) then
-      begin
-        Error('End of line in string!');
-        exit;
-      end;
-    end;
-
     if Ch = '\' then
     begin
-      StringBuffer := StringBuffer + CopyString(Content, StartString, Index - StartString);
-      StartString := Index + 1;
+      Collector.Collect(Content, Index);
+      Collector.Started := Index + 1;
       Token := tkEscape;
     end
+    else if jsoModern in Options then
+    begin
+      if Ch = #0 then
+      begin
+        Collector.Collect(Content, Index);
+        Collector.Started := Index + 1;
+        NewLine;
+      end
+      else if (Ch = #13) or ((Ch = #10) and (LastChar <> #13)) then
+      begin
+        if Collector.Token = tkBackQuoteString then
+        begin
+          Collector.IsMultiLine := True;
+          Collector.Collect(Content, Index + 1);
+          Collector.Started := Index + 1;
+        end
+        else
+        begin
+          Collector.Collect(Content, Index);
+          Collector.Started := Index + 1;
+        end;
+        NewLine;
+      end;
+    end
+    else if (Ch = #0) or (Ch = #10) or (Ch = #13) then
+      Error('End of line in string!');
   end;
 
   procedure EndString;
@@ -328,37 +496,36 @@ var
     if Expect = exName then
     begin
       //Creating a Pair Item
-      StringBuffer := StringBuffer + CopyString(Content, StartString, Index - StartString);
-      AcquireProc(Parent, StringBuffer, aqPair, Pair);
+      Collector.Collect(Content, Index);
+      Collector.FlushBuffer;
+      AcquireProc(Pair, Parent, Collector.Buffer, aqPair, Default(TmnJsonStringType));
       Expect := exAssign;
     end
     else if Expect = exValue then
     begin
-      StringBuffer := StringBuffer + CopyString(Content, StartString, Index - StartString);
-      AcquireProc(Parent, StringBuffer, aqString, AObject);
+      Collector.Collect(Content, Index);
+      Collector.FlushBuffer;
+      AcquireProc(AObject, Parent, Collector.Buffer, aqString, Collector.GetStringOptions);
       Expect := exNext;
     end
     else
       CheckExpected([exName, exValue], [Context]);
-    if StringBuffer <> '' then
-      StringBuffer := '';
     Token := tkNone;
-    TokenString := tkNone;
+    Collector.Token := tkNone;
   end;
 
   procedure SetEscapeChar(Ch: UTF8Char);
   begin
-    StringBuffer := StringBuffer + Ch;
+    Collector.AppendChar(AnsiChar(Ch));
     Next;
-    StartString := Index;
-    Token := TokenString;
+    Collector.Started := Index;
+    Token := Collector.Token;
   end;
 
   procedure IlligalCharacter(Ch: UTF8Char);
   begin
-    Error('Illigal character: ' + Ch + ' '+ IntToHex(ord(Ch)));
+    Error('Illigal character: `' + Ch + '` '+ IntToHex(ord(Ch)));
   end;
-
 begin
   if (@AcquireProc = nil) then
     Error('JSON Parser: Acquire is nil');
@@ -371,100 +538,103 @@ begin
     exit;
   end;
 
-  Index := Start;
-  StartString := -1; //* for strings
-//  Token := tkNone;
+  if From >= Size then
+    exit;
+
+  Ch := #0;
+  Index := From;
+  Collector.Started := 0;
   try
     repeat
       LastChar := Ch;
       Ch := UTF8Char(Content[Index]);
       case Token of
-        tkReturn:
-        begin
-          if Ch = #10 then
-            Next;
-          Token := tkNone;
-        end;
         tkCommentOpen:
         begin
           if Ch = '/' then
-            Token := tkSLComment
+          begin
+            Token := tkSingleLineComment;
+            Next;
+            CommentBuffer := '';
+            CommentStarted := Index;
+          end
           else if Ch = '*' then
-            Token := tkMLComment
+          begin
+            Token := tkMultiLineComment;
+            Next;
+          end
           else
             Error('Expected / or * for comment, but found ' + Ch);
-          Next;
         end;
-        tkSLComment:
+        tkSingleLineComment:
         begin
-          if CharInSet(Ch, [#0, #10, #13]) then
+          if (Ch = #0) or (Ch = #10) or (Ch = #13) then
+          begin
             Token := tkNone;
+            NewLine;
+          end;
           Next;
         end;
-        tkMLComment:
+        tkMultiLineComment:
         begin
           if (Ch = '/') and (LastChar = '*') then
             Token := tkNone;
           Next;
         end;
-        tkEscapeChar:
+        tkEscapeHex:
         begin
-          if Length(EscapeBuffer) < 4 then
+          if (Length(Collector.Escape) < Collector.EscapeLength) and cHexChar[Byte(Ch)] then
           begin
-            if (jsoStrict in Options) then
-            begin
-              if CharInSet(Ch, [#0, #10, #13]) then
-                Error('End of line in string!');
-            end;
-            EscapeBuffer := EscapeBuffer + Ch;
+            Collector.Escape := Collector.Escape + Ch;
             Next;
-        end
+          end
           else
           begin
-            if EscapeBuffer <> '' then
+            if Collector.Escape <> '' then
             begin
-              StringBuffer := StringBuffer + UTF8Encode({$ifdef FPC}Character{$else}Char{$endif}.ConvertFromUtf32(StrToInt('$'+EscapeBuffer)));
-              EscapeBuffer := '';
+              Collector.Append(UTF8Encode({$ifdef FPC}Character{$else}Char{$endif}.ConvertFromUtf32(StrToInt('$'+Collector.Escape))));
+              Collector.Escape := '';
             end;
-            StartString := Index;
-            Token := tkDQString;
-//            Next;
+            Collector.Started := Index;
+            Token := Collector.Token;
           end;
         end;
         tkEscape:
         begin
-          if (jsoStrict in Options) then
+          if not (jsoModern in Options) then
           begin
-            if CharInSet(Ch, [#0, #10, #13]) then
+            if (Ch = #0) or (Ch = #10) or (Ch = #13) then
               Error('End of line in string!');
           end;
 
           case Ch of
-            'u':
+            'x', 'u':
             begin
-              EscapeBuffer := '';
-              Token := tkEscapeChar;
+              Collector.Escape := '';
+              if Ch = 'u' then
+                Collector.EscapeLength := 4
+              else
+                Collector.EscapeLength := 2;
+              Token := tkEscapeHex;
               Next;
-              StartString := Index;
+              Collector.Started := Index;
             end;
             #13:
             begin
-              StringBuffer := StringBuffer + #13;
-              inc(LineNumber);
-              ColumnNumber := 1;
+              Collector.IsMultiLine := True;
+              NewLine;
               Next;
-              StartString := Index;
+              Collector.Started := Index;
             end;
             #10:
             begin
-              StringBuffer := StringBuffer + #10;
               if LastChar <> #13 then
               begin
-                Inc(LineNumber);
-                ColumnNumber := 1;
+                Collector.IsMultiLine := True;
+                NewLine;
               end;
               Next;
-              StartString := Index;
+              Collector.Started := Index;
             end;
             //* We need use map instead
             'b': SetEscapeChar(#8);
@@ -477,7 +647,7 @@ begin
               SetEscapeChar(Ch);
           end;
         end;
-        tkDQString:
+        tkDoubleQuoteString:
         begin
           if Ch = '"' then
             EndString
@@ -486,7 +656,7 @@ begin
           //Next char yes, we do not need " anymore
           Next;
         end;
-        tkSQString:
+        tkSingleQuoteString:
         begin
           if Ch = '''' then
             EndString
@@ -495,37 +665,39 @@ begin
           //Next char yes, we do not need ' anymore
           Next;
         end;
-        tkIdentifire:
+        tkBackQuoteType:
         begin
-          if not CharInSet(Ch, ['A'..'Z', 'a'..'z', '0'..'9',  '_']) then
+          if (Ch = ' ') or (Ch = #10) or (Ch = #13) then
           begin
-            if Expect = exName then
-            begin
-              //Creating a Pair Item
-              AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqPair, Pair);
-              Expect := exAssign;
-            end
-            else if Expect = exValue then
-            begin
-              AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqIdentifier, AObject);
-              Expect := exNext;
-            end
-            else
-              CheckExpected([exName, exValue], [Context]);
-            Token := tkNone;
+            Token := tkBackQuoteString;
+            Collector.Collect(Content, Index);
+            Collector.FlushBuffer;
+            Collector.Name := Collector.Buffer;
+            Collector.Reset(Index, tkBackQuoteString);
+            if (Ch = #13) or ((Ch = #10) and (LastChar <> #13)) then
+              NewLine;
+            Next;
           end
           else
-          begin
             Next;
-          end;
+        end;
+        tkBackQuoteString:
+        begin
+          if Ch = '`' then
+            EndString
+          else
+            ContinueString;
+          Next;
         end;
         tkNumber:
         begin
-          if not CharInSet(Ch, sNumberChars) then
+          if not cNumberChar[Byte(Ch)] then
           begin
             if Expect = exValue then
             begin
-              AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqNumber, AObject);
+              Collector.Collect(Content, Index);
+              Collector.FlushBuffer;
+              AcquireProc(AObject, Parent, Collector.Buffer, aqNumber, Default(TmnJsonStringType));
               Expect := exNext;
             end
             else
@@ -537,58 +709,68 @@ begin
             Next;
           end;
         end;
-        else
+        tkIdentifire: /// Should be last one in `Case`
+        begin
+          if not cIdentChar[Byte(Ch)] then
+          begin
+            if Expect = exName then
+            begin
+              //Creating a Pair Item
+              Collector.Collect(Content, Index);
+              Collector.FlushBuffer;
+              AcquireProc(Pair, Parent, Collector.Buffer, aqPair, Default(TmnJsonStringType));
+              Expect := exAssign;
+            end
+            else if Expect = exValue then
+            begin
+              Collector.Collect(Content, Index);
+              Collector.FlushBuffer;
+              AcquireProc(AObject, Parent, Collector.Buffer, aqIdentifier, Default(TmnJsonStringType));
+              Expect := exNext;
+            end
+            else
+              CheckExpected([exName, exValue], [Context]);
+            Token := tkNone;
+          end
+          else
+          begin
+            Next;
+          end;
+        end;
+        else //* Open
         begin
           case Ch of
-            ' ', #8, #9:; //* Nothing to do
-            #13:
-            begin
-              Inc(LineNumber);
-              ColumnNumber := 1;
-              Token := tkReturn;
-            end;
-            #10:
-            begin
-              if LastChar <> #13 then
-              begin
-                Inc(LineNumber);
-                ColumnNumber := 1;
-              end;
-            end;
-            'A'..'Z', 'a'..'z', '_':
-            begin
-              CheckExpected([exName, exValue, exEnd]);
-              StartString := Index;
-              Token := tkIdentifire;
-            end;
-            '-', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.': //may start with . ?
-            begin
-              CheckExpected([exValue, exEnd]);
-              StartString := Index;
-              Token := tkNumber;
-            end;
             '"':
             begin
               CheckExpected([exName, exValue, exEnd]);
-              StartString := Index + 1;
-              Token := tkDQString;
-              TokenString := tkDQString;
+              Collector.Reset(Index + 1, tkDoubleQuoteString);
+              Token := tkDoubleQuoteString;
             end;
             '''':
             begin
-              if jsoStrict in Options then
+              if not (jsoModern in Options) then
                 IlligalCharacter(Ch)
               else
               begin
                 CheckExpected([exName, exValue, exEnd]);
-                StartString := Index + 1;
-                Token := tkSQString;
-                TokenString := tkSQString;
+                Collector.Reset(Index + 1, tkSingleQuoteString);
+                Token := tkSingleQuoteString;
+              end;
+            end;
+            '`':
+            begin
+              if not (jsoModern in Options) then
+                IlligalCharacter(Ch)
+              else
+              begin
+                CheckExpected([exName, exValue, exEnd]);
+                Collector.Reset(Index + 1, tkBackQuoteType);
+                Token := tkBackQuoteType;
               end;
             end;
             '/':
             begin
-              if jsoStrict in Options then
+              if not (jsoModern in Options) then
                 IlligalCharacter(Ch)
               else
                 Token := tkCommentOpen;
@@ -616,7 +798,7 @@ begin
             begin
               CheckExpected([exValue]);
               Push;
-              AcquireProc(Parent, '', aqObject, AObject);
+              AcquireProc(AObject, Parent, '', aqObject, Default(TmnJsonStringType));
               Parent := AObject;
               Context := cxPair;
               Expect := exName;
@@ -627,7 +809,10 @@ begin
               if State = stOpen then
                 CheckExpected([exNext, exName], [cxPair])
               else
-                CheckExpected([exNext], [cxPair]);
+              begin
+                if not (jsoModern in Options) then
+                  CheckExpected([exNext], [cxPair]);
+              end;
               if Expect = exNext then
                 Pop;
               Pop;
@@ -640,7 +825,7 @@ begin
             begin
               CheckExpected([exValue]);
               Push;
-              AcquireProc(Parent, '', aqArray, AObject);
+              AcquireProc(AObject, Parent, '', aqArray, Default(TmnJsonStringType));
               Parent := AObject;
               Context := cxArray;
               Expect := exValue;
@@ -651,12 +836,35 @@ begin
               if State = stOpen then
                 CheckExpected([exNext, exValue], [cxArray])
               else
-                CheckExpected([exNext], [cxArray]);
+              begin
+                if not (jsoModern in Options) then
+                  CheckExpected([exNext], [cxArray]);
+              end;
               Pop;
               if StackIndex < 0 then
                 Expect := exEnd
               else
                 Expect := exNext;
+            end;
+            ' ', #8, #9:; //* Nothing to do
+            #13:
+              NewLine;
+            #10:
+            begin
+              if LastChar <> #13 then
+                NewLine;
+            end;
+            '-', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.': //may start with . ?
+            begin
+              CheckExpected([exValue, exEnd]);
+              Collector.Reset(Index, tkNumber);
+              Token := tkNumber;
+            end;
+            'A'..'Z', 'a'..'z', '_': //* Should be last one in `Case`
+            begin
+              CheckExpected([exName, exValue, exEnd]);
+              Collector.Reset(Index, tkIdentifire);
+              Token := tkIdentifire;
             end;
             else
               IlligalCharacter(Ch);
@@ -664,7 +872,11 @@ begin
           Next;
         end;
       end;
-    until (Ch=#0) or (Index >= Size);
+    until Index >= Size;
+
+    {if Collector.Token > tkNone then //* TODO for chunks
+    begin
+    end}
   except
     on E: Exception do
     begin
@@ -686,15 +898,15 @@ begin
   Error := JSONParser.ErrorMessage;
 end;
 
-procedure JsonLintAcquireCallback(AParentObject: TObject; const Value: string; const ValueType: TmnJsonAcquireType; out AObject: TObject);
+procedure JsonLintAcquireCallback(out AObject: TObject; AParentObject: TObject; const Value: string; const ValueType: TmnJsonType; const StringOptions: TmnJsonStringType);
 begin
   AObject := nil;
 end;
 
-procedure JsonLintString(const S: string; out Error: string; Options: TJSONParseOptions);
+function JsonLintString(const S: string; Options: TJSONParseOptions): string;
 begin
   try
-    JsonParseCallback(Utf8Encode(s), Error, nil, JsonLintAcquireCallback, Options);
+    JsonParseCallback(Utf8Encode(s), Result, nil, JsonLintAcquireCallback, Options);
   except
     on E: Exception do
     begin
@@ -703,18 +915,25 @@ begin
   end
 end;
 
-function JsonLintFile(const FileName: string; Options: TJSONParseOptions = []): string; //Return Error message
+function JsonLintChunks(const Content: string; Options: TJSONParseOptions;
+  ChunkSize: Integer): string;
+var
+  JSONParser: TmnJSONParser;
+  s: string;
+  i: Integer;
 begin
-  Result := '';
-  try
-    JsonLintString(LoadFileString(FileName), Result, Options);
-  except
-    on E: Exception do
-    begin
-      Result := E.Message;
-    end;
+  i:=1;
+  JSONParser.Init(nil, JsonLintAcquireCallback, Options);
+  while i < Length(Content) do
+  begin
+    s := copy(Content, i, ChunkSize);
+    JSONParser.Parse(s);
+    i := i + ChunkSize;
   end;
+  JSONParser.Finish;
+  Result := JSONParser.ErrorMessage;
 end;
 
 initialization
+  InitCharTables;
 end.

@@ -17,7 +17,7 @@ unit mnClasses;
 interface
 
 uses
-  Classes, SysUtils, StrUtils, Types, DateUtils,
+  Classes, SysUtils, StrUtils, Types, DateUtils, SyncObjs, 
   Generics.Collections, Contnrs;
 
 type
@@ -143,7 +143,6 @@ type
     private
       FDicSize: Integer;
       FDic: TDictionary<string, _Object_>;
-
     protected
       procedure Created; override;
       {$ifdef FPC}
@@ -157,7 +156,7 @@ type
       constructor Create(ADicSize: Integer = 1024; FreeObjects : boolean = True); overload;
       destructor Destroy; override;
       procedure AfterConstruction; override;
-      function Find(const Name: string): _Object_;
+      function Find(const Name: string): _Object_; overload;
       function IndexOfName(vName: string): Integer;
       {$ifdef FPC} //not now
       procedure Clear; override;
@@ -212,6 +211,30 @@ type
 
     {$endif}
 
+
+  { TmnThread }
+
+  TmnThread = class(TThread)
+  protected
+    procedure Execute; override;
+
+  public
+    constructor Create;
+  end;
+
+  { TmnLockThread }
+
+  TmnLockThread = class(TmnThread)
+  private
+    FLock: TCriticalSection;
+  protected
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Enter;
+    procedure Leave;
+  end;
+    
 implementation
 
 function TmnObjectList<_Object_>.GetItem(Index: NativeInt): _Object_;
@@ -339,7 +362,7 @@ end;
 
 procedure TmnObjectList<_Object_>.QuickSort;
 begin
-  if Count<>0 then
+  if Count <> 0 then
     QuickSortItems(0, Count - 1);
 end;
 
@@ -712,6 +735,46 @@ end;
 procedure TmnInterfacedPersistent.Created;
 begin
 
+end;
+
+{ TmnThread }
+
+constructor TmnThread.Create;
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+
+end;
+
+procedure TmnThread.Execute;
+begin
+  //inherited;
+
+  //TThread.NameThreadForDebugging('DelphiCreated_' + ClassName, Self.ThreadID);
+  //i := SetThreadDescription(Self.ThreadID, PChar('DelphiCreated_' + ClassName));
+  //LogWriteln('Thread[%d]: %s', [Self.ThreadID, ClassName]);
+end;
+
+constructor TmnLockThread.Create;
+begin
+  inherited;
+  FLock := TCriticalSection.Create;
+end;
+
+destructor TmnLockThread.Destroy;
+begin
+  inherited;
+  FreeAndNil(FLock); //* it used in other inherited classes
+end;
+
+procedure TmnLockThread.Enter;
+begin
+  FLock.Enter;
+end;
+
+procedure TmnLockThread.Leave;
+begin
+  FLock.Leave;
 end;
 
 end.

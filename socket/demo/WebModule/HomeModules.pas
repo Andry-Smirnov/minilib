@@ -19,7 +19,7 @@ type
 
   TmySchema = class abstract(THTML)
   protected
-    procedure DoCompose; override;
+    procedure DoCompose(const AContext: TmnwContext); override;
   end;
 
   { TWelcomeSchema }
@@ -30,17 +30,19 @@ type
     Input1: THTML.TInput;
     Input2: THTML.TInput;
     Input3: THTML.TInput;
-    procedure DoAccept(const AContext: TmnwContext; var Resume: Boolean); override;
-    procedure DoCompose; override;
-  public
-    class function GetCapabilities: TmnwSchemaCapabilities; override;
+     
+    procedure DoPrepare; override;    
+    procedure DoAccept(var AContext: TmnwContext; var Resume: Boolean); override;
+    procedure DoCompose(const AContext: TmnwContext); override;
+    procedure AttachedMessage(const s: string); override; 
+  public    
   end;
 
   TWSShema = class(THTML)
   private
   public
   protected
-    procedure DoCompose; override;
+    procedure DoCompose(const AContext: TmnwContext); override;
   public
   end;
 
@@ -50,8 +52,8 @@ type
   private
   public
   protected
-    procedure DoAction(const AContext: TmnwContext; AResponse: TmnwResponse); override;
-    procedure DoCompose; override;
+    procedure DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+    procedure DoCompose(const AContext: TmnwContext); override;
   public
   end;
 
@@ -61,19 +63,20 @@ type
   private
   public
   protected
-    procedure DoAction(const AContext: TmnwContext; AResponse: TmnwResponse); override;
-    procedure DoCompose; override;
+    procedure DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+    procedure DoCompose(const AContext: TmnwContext); override;
   public
   end;
 
-  { TSimpleSchema }
+  { TInfoSchema }
 
-  TSimpleSchema = class(THTML)
+  TInfoSchema = class(THTML)
   private
   public
-  protected
-    procedure DoCompose; override;
+  protected     
+    procedure DoCompose(const AContext: TmnwContext); override;
   public
+    class function GetCapabilities: TmnwSchemaCapabilities; override;
   end;
 
   { TFilesSchema }
@@ -83,7 +86,7 @@ type
   public
   protected
     procedure Created; override;
-    procedure DoCompose; override;
+    procedure DoCompose(const AContext: TmnwContext); override;
   public
   end;
 
@@ -95,14 +98,12 @@ type
 
   { THomeModule }
 
-  THomeModule = class(TUIWebModule)
+  THomeModule = class(TmnwWebModule)
   private
   protected
-    function CreateRenderer: TmnwRenderer; override;
     procedure InitItems; override;
     procedure Start; override;
-  public
-    destructor Destroy; override;
+  public    
   end;
 
 implementation
@@ -134,7 +135,7 @@ type
 
   TMyLink = class(THTML.TLink)
   public
-    procedure DoAction(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+    procedure DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse); override;
     procedure DoExecute; override;
   end;
 
@@ -147,10 +148,10 @@ type
 
 { TMyLink }
 
-procedure TMyLink.DoAction(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TMyLink.DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse);
 begin
   inherited;
-  AResponse.Resume := False;
+  AResponse.Responded;
 end;
 
 procedure TMyLink.DoExecute;
@@ -196,20 +197,25 @@ end;
 
 { TmySchema }
 
-procedure TmySchema.DoCompose;
+procedure TmySchema.DoCompose(const AContext: TmnwContext);
 begin
   inherited;
 end;
 
+procedure TWelcomeSchema.AttachedMessage(const s: string);
+begin
+  inherited;
+  Attachments.SendMessage('ECHO: '+s);
+end;
+
 { TWellcomeSchema }
 
-procedure TWelcomeSchema.DoAccept(const AContext: TmnwContext;
-  var Resume: Boolean);
+procedure TWelcomeSchema.DoAccept(var AContext: TmnwContext; var Resume: Boolean);
 begin
   Resume := True;
 end;
 
-procedure TWelcomeSchema.DoCompose;
+procedure TWelcomeSchema.DoCompose(const AContext: TmnwContext);
 begin
   inherited;
   RefreshInterval := 5;
@@ -267,11 +273,11 @@ begin
           Caption := 'Welcome';
           Name := 'card';
 
-          with TMemoryImage.Create(This) do
+          with TImageMemory.Create(This) do
           begin
             Name := 'logo';
             Route := 'logo';
-            LoadFromFile(IncludePathDelimiter(Schema.GetHomePath) + 'logo.png');
+            LoadFromFile(IncludePathDelimiter(Schema.GetHomeFolder) + 'logo.png');
           end;
 
 {          with TImage.Create(This) do
@@ -281,7 +287,7 @@ begin
               Source := IncludeURLDelimiter(Module.HomeURL)+'assets/logo';
           end;}
 
-          with TRow.Create(This) do
+          with TColumn.Create(This) do
           begin
             Input1 := TInput.Create(This);
             with Input1 do
@@ -290,28 +296,28 @@ begin
               id := 'input1';
               Caption := 'Number 1';
             end;
-
+            TBreak.Create(This);
             Input2 := TInput.Create(This);
             with Input2 do
             begin
               Name := 'Input2';
               Caption := 'Number 2';
             end;
-
+            TBreak.Create(This);
             with TMyButton.Create(This) do
             begin
               ID := 'Add';
               Name := 'AddBtn';
               Caption := 'Add';
             end;
-
+            TBreak.Create(This);
             Input3 := TInput.Create(This);
             with Input3 do
             begin
               Name := 'Input3';
               Caption := 'Result';
             end;
-
+            TBreak.Create(This);
           end;
 
 {$ifdef fpc1}
@@ -341,10 +347,10 @@ begin
   end;
 end;
 
-class function TWelcomeSchema.GetCapabilities: TmnwSchemaCapabilities;
+procedure TWelcomeSchema.DoPrepare;
 begin
-  //Result := [schemaInteractive] + Inherited GetCapabilities;
-  Result := Inherited GetCapabilities;
+  inherited;
+
 end;
 
 { TWSEchoGetHomeCommand }
@@ -353,7 +359,7 @@ procedure TWSEchoGetHomeCommand.RespondResult(var Result: TmodRespondResult);
 var
   s: string;
 begin
-  if Request.ConnectionType = ctWebSocket then
+  if Request.RequestType = rtWebSocket then
   begin
     //Request.Path := DeleteSubPath(Name, Request.Path);
     while Response.Stream.Connected do
@@ -370,26 +376,24 @@ end;
 
 { TLoginSchema }
 
-procedure TLoginSchema.DoAction(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TLoginSchema.DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse);
 var
   aUsername, aPassword: string;
 begin
   if AContext.Data <> nil then
   begin
-    if SameText(AContext.Data.Values['execute'], 'true') then
+    if AContext.Data['execute'].AsBoolean then
     begin
-      aUsername := AContext.Data.Values['username'];
-      aPassword := AContext.Data.Values['password'];
+      aUsername := AContext.Data['username'].AsString;
+      aPassword := AContext.Data['password'].AsString;
       AResponse.Session.Value := aUsername +'/'+ aPassword;
-      AResponse.Resume := False;
-      AResponse.Answer := hrRedirect;
-      AResponse.Location := IncludePathDelimiter(AContext.GetPath) + 'dashboard';
+      AResponse.RespondRedirectTo(IncludePathDelimiter(AContext.GetPath) + 'dashboard');
     end;
   end;
   inherited;
 end;
 
-procedure TLoginSchema.DoCompose;
+procedure TLoginSchema.DoCompose(const AContext: TmnwContext);
 begin
   inherited;
   with Document do
@@ -504,26 +508,24 @@ end;
 
 { TDemoSchema }
 
-procedure TDemoSchema.DoAction(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TDemoSchema.DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse);
 var
   aUsername, aPassword: string;
 begin
   if AContext.Data <> nil then
   begin
-    if SameText(AContext.Data.Values['execute'], 'true') then
+    if AContext.Data['execute'].AsBoolean then
     begin
-      aUsername := AContext.Data.Values['username'];
-      aPassword := AContext.Data.Values['password'];
+      aUsername := AContext.Data['username'].AsString;
+      aPassword := AContext.Data['password'].AsString;
       AResponse.Session.Value := aUsername +'/'+ aPassword;
-      AResponse.Resume := False;
-      AResponse.Answer := hrRedirect;
-      AResponse.Location := IncludePathDelimiter(AContext.GetPath) + 'dashboard';
+      AResponse.RespondRedirectTo(IncludePathDelimiter(AContext.GetPath) + 'dashboard');
     end;
   end;
   inherited;
 end;
 
-procedure TDemoSchema.DoCompose;
+procedure TDemoSchema.DoCompose(const AContext: TmnwContext);
 var
   i: Integer;
 begin
@@ -556,7 +558,7 @@ begin
             Caption := 'Item2';
           end;
 
-          with Buttons do
+          with Tools do
           begin
             with TThemeModeButton.Create(This) do
             begin
@@ -565,7 +567,8 @@ begin
 
             with TDropdown.Create(This) do
             begin
-              Image.Icon := 'icon mw-font-normal';
+              Image.Symbol := 'icon mw-font-normal';
+              Options := Options + [dropEnd];
               with TZoomButtons.Create(This) do
               begin
                 //Caption := 'Font';
@@ -757,11 +760,54 @@ begin
   end;
 end;
 
-{ TSimpleSchema }
+{ TInfoSchema }
 
-procedure TSimpleSchema.DoCompose;
+// http://localhost:8080/home/info/panel1/test1/test2
+procedure TInfoSchema.DoCompose(const AContext: TmnwContext);
+var
+  aPanel: TPanel;
 begin
   inherited;
+  with Document.Body.Main do
+  begin            
+//    Route := 'main';
+    with TPanel.Create(this) do    
+    begin
+      Route := 'panel1';
+      TCode.Create(This, 'Context.Route: ' + AContext.Route);
+      TBreak.Create(This);
+      TCode.Create(This, 'e.GetPath: ' + This.GetPath);
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.GetRelativePath: ' + AContext.GetRelativePath(This));
+      TBreak.Create(This);
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.GetHomePath: ' + AContext.GetHomePath);
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.GetPath(e): ' + AContext.GetPath(This));
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.GetURL: ' + AContext.GetURL);
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.GetURL(e): ' + AContext.GetURL(this));
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.GetHomeURL: ' + AContext.GetHomeURL);
+    end;
+    
+    aPanel := TPanel.Create(this);
+    with aPanel do    
+    begin
+      Route := 'panel2'; 
+      OnRespond := procedure (const AContext: TmnwContext; AResponse: TmnwResponse)
+      begin
+        AResponse.RespondText('Hello World'+#13 + AContext.Route);
+      end;
+    end;
+  end;
+    
+end;
+
+class function TInfoSchema.GetCapabilities: TmnwSchemaCapabilities;
+begin
+  Result := (inherited GetCapabilities) + [schemaDynamic];
 end;
 
 { TFilesSchema }
@@ -771,22 +817,22 @@ begin
   inherited;
 end;
 
-procedure TFilesSchema.DoCompose;
+procedure TFilesSchema.DoCompose(const AContext: TmnwContext);
 begin
   inherited;
   ServeFiles := [serveEnabled, serveSmart, serveDefault, serveIndex];
-  HomePath := IncludePathDelimiter(App.HomePath) + 'files';
+  HomeFolder := IncludePathDelimiter(Web.HomeFolder) + 'files';
   with TFolder.Create(This) do
   begin
     ServeFiles := [serveEnabled, serveSmart, serveDefault, serveIndex];
     Route := 'folder';
-    HomePath := ExpandFileName(App.HomePath + 'smilies');
+    HomeFolder := ExpandFileName(Web.HomeFolder+ 'smilies');
   end;
 end;
 
 { TWSShema }
 
-procedure TWSShema.DoCompose;
+procedure TWSShema.DoCompose(const AContext: TmnwContext);
 begin
   inherited;
   Name := 'ws';
@@ -794,50 +840,34 @@ begin
   with TFile.Create(This) do
   begin
     Route := 'echo';
-    FileName := IncludePathDelimiter(App.HomePath) + 'ws.html';
+    FileName := IncludePathDelimiter(Web.HomeFolder) + 'ws.html';
   end;
 end;
 
 { THomeModule }
 
-function THomeModule.CreateRenderer: TmnwRenderer;
-begin
-  Result := TmnwBootstrapRenderer.Create(Self, WebApp.IsLocal);
-end;
-
-destructor THomeModule.Destroy;
-begin
-  inherited;
-end;
-
 procedure THomeModule.InitItems;
 begin
   inherited;
-  WebApp.RegisterSchema('', TWelcomeSchema);
-  WebApp.RegisterSchema('login', TLoginSchema);
-  WebApp.RegisterSchema('demo', TDemoSchema);
-  WebApp.RegisterSchema('simple', TSimpleSchema);
-  WebApp.RegisterSchema('files', TFilesSchema);
-  WebApp.RegisterSchema('ws', TWSShema);
+  Web.RegisterSchema('', TWelcomeSchema);
+  Web.RegisterSchema('login', TLoginSchema);
+  Web.RegisterSchema('demo', TDemoSchema);
+  Web.RegisterSchema('info', TInfoSchema);
+  Web.RegisterSchema('files', TFilesSchema);
+  Web.RegisterSchema('ws', TWSShema);
   RegisterCommand('.ws', TWSEchoGetHomeCommand, False);
 end;
 
 procedure THomeModule.Start;
 begin
   inherited;
-  with WebApp.Assets do
+  with Web.Assets do
   begin
-    if Logo.Data.Size = 0 then
-      Logo.LoadFromFile(HomePath + 'logo.png');
-      //Logo.LoadFromFile(HomePath + 'logo.png');
-    with thtml.TFile.Create(This) do
-    begin
-      Name := 'jquery';
-      Route := 'jquery';
-      FileName := IncludePathDelimiter(HomePath) + 'jquery-3.7.1.min.js';
-    end;
+    //Web.OnlineFiles:= olfSmart;
+    LogoFile := HomeFolder + 'logo.png';
   end;
 end;
 
+initialization  
 end.
 
