@@ -34,9 +34,21 @@ const
 
   URLDelimiter = '/';
 
+  PathDelimiter  = {$IFDEF MSWINDOWS} '\'; {$ELSE} '/'; {$ENDIF}
+  PathDelimiters = ['\', '/'];
+
+  msOneMinute = 60;
+  msOneHour = 60*60;
+  msOneDay = msOneHour * 24;
+  msOneWeek = msOneDay * 7;
+  msOneMonth = msOneDay * 30;
+  msOneYear = msOneMonth * 12;
+  msOneCentury = 3110400000;
+  //msDoomDay = NO ONE KNOWS
+    
 type
   TmnDataType = (dtUnknown, dtString, dtBoolean, dtInteger, dtCurrency, dtFloat, dtDate, dtTime, dtDateTime, dtMemo, dtBlob, dtBig, dtColor {bigint or int64}, dtUUID{, dtEnum, dtSet});
-  TmnSubType = (dstBinary, dstText, dstImage, dstXML, dstJSON);
+  TmnSubType = (dstBinary, dstText, dstJSON, dstXML, dstImage);
   TmnBlobType = (blobBinary, blobText);
 
 { C Types }

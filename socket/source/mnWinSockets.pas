@@ -73,7 +73,6 @@ type
 implementation
 
 const
-  cBacklog = 5;
   INVALID_SOCKET: TSocketHandle = TSocketHandle(-1);
   SO_TRUE: Longbool = True;
 //  SO_FALSE:Longbool=False;
@@ -160,7 +159,7 @@ function TmnSocket.DoShutdown(How: TmnSocketStates): TmnError;
 var
   c: Integer;
   iHow: Integer;
-  errno: longint;
+  //errno: longint;
 begin
   if [sdReceive, sdSend] = How then
     iHow := SD_BOTH
@@ -176,7 +175,7 @@ begin
 
   //CheckActive;
   c := WinSock2.Shutdown(FHandle, iHow);
-  errno := WSAGetLastError;
+  //errno := WSAGetLastError;
   if c = SOCKET_ERROR then
     Result := erInvalid
   else
@@ -188,7 +187,7 @@ var
   c: Integer;
 begin
   CheckActive;
-  c := WinSock2.listen(FHandle, cBacklog);
+  c := WinSock2.listen(FHandle, Backlog);
   if c = SOCKET_ERROR then
     Result := erInvalid
   else

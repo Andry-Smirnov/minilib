@@ -1,5 +1,6 @@
 "use strict";
-const version = "1.82";
+const version = "1.84";
+//used <script src="https://cdn.jsdelivr.net/npm/js-sha256@0.11.0/src/sha256.min.js"></script>
 
 let mnw = {};
 
@@ -165,17 +166,41 @@ mnw.action = function(event, url, data)
    return false;
 }
 
+
 /* Utils functions */
 
-mnw.formPost = function(formElement, event) {
-  if (event) {
-    event.preventDefault();
+mnw.formPost = async function(e, extraJson) {
+  if (e) e.preventDefault();
+  const formElement = e.target;
+
+  // Collect all native inputs as JSON (handles checkboxes, radios, files automatically)
+  const data = Object.fromEntries(new FormData(formElement));
+
+  if (extraJson)
+    Object.assign(data, extraJson);
+
+  const action = e.submitter.getAttribute('data-action') || "";
+  if (action)
+    data['action'] = action;
+
+  // Hash password fields before submission
+  for (const el of formElement.querySelectorAll('input[type="password"]')) {
+    const token = el.getAttribute('data-token') || "";
+    const name = el.getAttribute('name') || "";
+
+    if (token && name) {
+      data[name] = await sha256(el.value + '-' + token);
+    }
   }
-  const formData = new FormData(formElement);
-  const data = {};
-  formData.forEach((value, key) => {
-    data[key] = value;
+
+  /* use form.addEventListener("formdata", function(e) .... */
+
+  formElement.querySelectorAll('[name], [data-name], [data-field-name]').forEach(el => {
+    if (typeof el.setJSON === 'function') {
+        el.setJSON(data);
+    }
   });
+
   fetch(formElement.action, {
     method: 'POST',
     body: JSON.stringify(data),
@@ -231,6 +256,17 @@ mnw.formPost = function(formElement, event) {
 
 function init()
 {
+  document.querySelectorAll('form').forEach(form => {
+    form.addEventListener('reset', e => {
+      // setTimeout ensures the DOM values are actually reset before triggering
+      setTimeout(() => {
+        e.target.querySelectorAll('input, select, textarea').forEach(el => {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+      }, 0);
+    });
+  });
+
   reload_elements = document.querySelectorAll('[data-mnw-refresh-url]');
   if (reload_elements.length > 0)
   {
@@ -262,26 +298,6 @@ function finish()
 window.addEventListener('load', init);
 window.addEventListener("beforeunload", finish);
 
-/* UI functions */
-
-mnw.switch_zoom = function(sender, event)
-{
-  let mnw_zoom = sender.getAttribute('data-mnw-value') || '';
-  if (mnw_zoom === 'normal')
-    mnw_zoom = '';
-
-  if (mnw_zoom)
-  {
-    document.documentElement.setAttribute('data-mnw-zoom', mnw_zoom);
-    localStorage.setItem('mnw-zoom', mnw_zoom);
-  }
-  else
-  {
-    document.documentElement.removeAttribute('data-mnw-zoom');
-    localStorage.removeItem('mnw-zoom');
-  }
-}
-
 /* Bootstrap Functions */
 
 mnw.showToast = function(content, type = "warning")
@@ -298,7 +314,7 @@ mnw.showToast = function(content, type = "warning")
   }
 
   var element = document.createElement('div');
-  element.className = `toast align-items-center bg-${type} text-black border-black shadow-thin`;
+  element.className = `toast align-items-center bg-${type.toLowerCase()} text-black border-black shadow-thin`;
   element.setAttribute('role', 'alert');
   element.setAttribute('aria-live', 'assertive');
   element.setAttribute('aria-atomic', 'true');
@@ -318,22 +334,43 @@ mnw.showToast = function(content, type = "warning")
   toast.show();
 }
 
-mnw.switch_theme = function(sender, event)
+/* UI functions */
+
+mnw.switch_theme = function(e)
 {
   let bs_theme = 'dark';
   if (document.body.getAttribute('data-bs-theme') == 'dark')
     bs_theme = 'light';
   document.body.setAttribute('data-bs-theme', bs_theme);
+  document.body.setAttribute('data-theme', bs_theme); //* Some Addons/Controls may use it like Marked.js
   localStorage.setItem('mnw-theme', bs_theme);
+}
+
+mnw.switch_zoom = function(e)
+{
+  let mnw_zoom = e.currentTarget.getAttribute('data-mnw-value') || '';
+  if (mnw_zoom === 'normal')
+    mnw_zoom = '';
+
+  if (mnw_zoom)
+  {
+    document.documentElement.setAttribute('data-mnw-zoom', mnw_zoom);
+    localStorage.setItem('mnw-zoom', mnw_zoom);
+  }
+  else
+  {
+    document.documentElement.removeAttribute('data-mnw-zoom');
+    localStorage.removeItem('mnw-zoom');
+  }
 }
 
 mnw.init_zoom = function()
 {
   if (!document.body.getAttribute('data-mnw-zoom'))
   {
-    let bs_zoom = localStorage.getItem('mnw-zoom');
-    if (bs_zoom)
-      document.documentElement.setAttribute('data-mnw-zoom', bs_zoom);
+    let mnw_zoom = localStorage.getItem('mnw-zoom');
+    if (mnw_zoom)
+      document.documentElement.setAttribute('data-mnw-zoom', mnw_zoom);
   }
 }
 
@@ -374,6 +411,87 @@ document.addEventListener('DOMContentLoaded', function()
   const el = document.querySelector('.version');
   if (el) el.textContent += ' js: ' + version+'';
 
-  mnw.init_zoom();
+  //mnw.init_zoom(); moved to html
   mnw.init_accordions();
 });
+
+/* Confirm Modal */
+
+let _confirming = false;
+
+document.addEventListener('click', async function(e) {
+  if (_confirming) return;
+
+  const confirmEl = e.target.closest('[data-mnw-confirm]');
+  if (!confirmEl) return;
+
+  const message = confirmEl.getAttribute('data-mnw-confirm');
+  if (!message) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+
+  const confirmed = await mnw.confirm(message);
+  if (confirmed) {
+    _confirming = true;
+    confirmEl.click();
+    _confirming = false;
+  }
+}, true);
+
+mnw.confirm = function(message) {
+  return new Promise(function(resolve) {
+    var modalEl = document.getElementById('mnw-confirm-modal');
+    if (!modalEl) {
+      modalEl = document.createElement('div');
+      modalEl.id = 'mnw-confirm-modal';
+      modalEl.className = 'modal fade';
+      modalEl.setAttribute('tabindex', '-1');
+      modalEl.setAttribute('aria-hidden', 'true');
+      modalEl.innerHTML =
+        '<div class="modal-dialog modal-dialog-centered modal-sm">' +
+          '<div class="modal-content">' +
+            '<div class="modal-body h6 p-4 pb-0"></div>' +
+            '<div class="modal-footer border-0 pt-2">' +
+              '<button type="button" class="btn btn-secondary" data-mnw-confirm-no>No</button>' +
+              '<button type="button" class="btn btn-primary" data-mnw-confirm-yes>Yes</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(modalEl);
+    }
+
+    modalEl.querySelector('.modal-body').textContent = message;
+
+    var modal = new bootstrap.Modal(modalEl, { backdrop: 'static', keyboard: false });
+
+    function onDone(result) {
+      modalEl.removeEventListener('keydown', onKeyDown);
+      modal.hide();
+      resolve(result);
+    }
+
+    function onKeyDown(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        onDone(true);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        onDone(false);
+      }
+    }
+
+    modalEl.addEventListener('keydown', onKeyDown);
+
+    modalEl.querySelector('[data-mnw-confirm-yes]').onclick = function() {
+      onDone(true);
+    };
+
+    modalEl.querySelector('[data-mnw-confirm-no]').onclick = function() {
+      onDone(false);
+    };
+
+    modal.show();
+  });
+};

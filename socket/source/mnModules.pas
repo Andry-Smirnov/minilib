@@ -25,7 +25,7 @@
               ┌──┴───┐ ┌──────┴──────┐ ┌┴┐
   GET https://john.doe@www.example.com:123/forum/questions/?tag=networking&order=newest#top HTTP/1.1
   └┬┘ └────┬─┘└───────────┬──────────────┘└───────┬───────┘ └───────────┬─────────────┘└┬─┘ └───┬──┘
-  method Scheme          Authority          Path/Directory           query         fragment   protocol
+  method Scheme          Authority               Path                 Query        Fragment   Protocol
   └┬┘                                                       └───────────┬─────────────┘  
   Command                                                      Arguments/Params
 
@@ -129,23 +129,33 @@ type
   end;
 
   { TmnwCookie }
+  TmnwCookieOption =
+  (
+    Stricted, //SameSite
+    Secured, //HTTPS only
+    HostOnly,
+    HttpOnly //JS script in client cant see it
+  );
+
+  TmnwCookieOptions = set of TmnwCookieOption;
 
   TmnwCookie = class(TmnNameValueObject)
   private
     FDomain: string;
     FPath: string;
     FAge: Integer;
-    FChanged: Boolean;
+    FOptions: TmnwCookieOptions;
+    
     FDeleting: Boolean;
+    FChanged: Boolean;
     procedure SetAge(const AValue: Integer);
     procedure SetDomain(const AValue: string);
     procedure SetPath(const AValue: string);
+    procedure SetOptions(const Value: TmnwCookieOptions);
   protected
     procedure SetValue(const AValue: string); override;
     procedure Created; override;
   public
-    Stricted: Boolean; //SameSite
-    Secured: Boolean; //HTTPS only
     function GetText: string;
     function GenerateValue: string;
     procedure Delete;
@@ -154,6 +164,7 @@ type
     property Path: string read FPath write SetPath;
     property Domain: string read FDomain write SetDomain;
     property Age: Integer read FAge write SetAge;
+    property Options: TmnwCookieOptions read FOptions write SetOptions;
     property Changed: Boolean read FChanged;
   end;
 
@@ -163,6 +174,7 @@ type
   public
     procedure SetRequestText(S: string);
     function GetRequestText: string;    
+    function SetCookie(const Domain, Path: string; const Name: string; const Value: string; Options: TmnwCookieOptions = []; Age: Integer = 31536000 {a year}): TmnwCookie;
   end;
 
   TmnCustomCommand = class;
@@ -191,7 +203,7 @@ type
 
     procedure DoPrepareHeader; virtual;
     procedure DoSendHeader; virtual;
-    procedure DoWriteCookies; virtual;
+    procedure DoSetCookies; virtual;
     procedure DoHeaderSent; virtual;
 
     procedure InitProtocol; virtual;
@@ -204,8 +216,7 @@ type
     property Stream: TmnBufferStream read GetStream;
     property Header: TmodHeader read FHeader;
     property Cookies: TmnwCookies read FCookies;
-    procedure SetCookie(const vNameSpace, vName, Value: string); overload;
-    procedure SetCookie(const vName, Value: string); overload;
+    function SetCookie(const vName, Value: string): TmnwCookie; overload;
     function GetCookie(const vNameSpace, vName: string): string;
 
     procedure Reset;
@@ -239,10 +250,10 @@ type
     //from raw :) raw = Method + URI + Protocol
     Method: string;
     Protocol: string;
-    URI: string;
 
-    //from URI :) URI = Address + Query
-    Address: string;
+    URI: string;
+    //from URI :) URI = Path + Query
+    Path: string;
     Query: string;
 
     Command: String;
@@ -252,9 +263,14 @@ type
 
   TmnRoute = class(TStringList)
   private
-    function GetRoute(vIndex: Integer): string;
+    FIsRooted: Boolean;
+    function GetRoute(vIndex: Integer): string;    
   public
-    property Route[vIndex: Integer]: string read GetRoute; default;
+//    Index: Integer; TODO
+    //is started with / when parsed
+    function ToPath: string;
+    property IsRooted: Boolean read FIsRooted;
+    property Route[vIndex: Integer]: string read GetRoute; default;    
   end;
 
   TmodOptionValue = (ovUndefined, ovNo, ovYes);
@@ -303,17 +319,10 @@ type
     rtJSONData
 	);
 
-  TmodParams = class(TmnFields)
-  public
-//    property Field; default;
-  end;
-
   TmodRequest = class(TmodCommunicate)
   private
-    FArguments: TmodParams;
-    FPath: String;
+    FParams: TmnFields;
     FRequestType: TRequestType;
-    //FChunked: Boolean;
     FProtcolClass: TmnProtcolStreamProxyClass;
     FProtcolProxy: TmnProtcolStreamProxy;
     FChunkedProxy: TmnChunkStreamProxy;
@@ -321,10 +330,15 @@ type
     FMode: TStreamMode;
     FNameSpace: string;
     FRoute: TmnRoute;
-    FDirectory: String;
+    FCharset: string;
+    FContentType: string;
+    
+    FCurrentPath: String;
+    FBasePath: String;
     procedure SetChunkedProxy(const Value: TmnChunkStreamProxy);
     procedure SetProtcolClass(const Value: TmnProtcolStreamProxyClass);
     function GetConnected: Boolean;
+    function GetParam(Index: string): TmnField;
   protected
     Info: TmodRequestInfo;
     procedure Created; override;
@@ -345,30 +359,35 @@ type
     function ReadString(out s: string; Count: Integer): Boolean; overload;
     function ReadLine(out s: string): Boolean;
 
-    property Raw: String read Info.Raw write Info.Raw;
+    property Raw: String read Info.Raw;
 
     //from raw
-    property Method: string read Info.Method write Info.Method;
-    property URI: string read Info.URI write Info.URI;
-    property Protocol: string read Info.Protocol write Info.Protocol;
-    property Address: string read Info.Address write Info.Address;
-    property Query: string read Info.Query write Info.Query;
+    property Method: string read Info.Method;
+    property URI: string read Info.URI;
+    property Protocol: string read Info.Protocol;
+    //From URI :) URI = Path + Query
+    property Path: string read Info.Path;
+    property Query: string read Info.Query;
 
     //for module
     property Command: String read Info.Command write Info.Command;
     property Client: String read Info.Client write Info.Client;
     property IsSecure: Boolean read Info.IsSecure write Info.IsSecure;
-    property Path: String read FPath write FPath;
+
+    //Current Path is changable while passing it to modules or submodules/schemas/elements
+    property CurrentPath: String read FCurrentPath;
+    property BasePath: String read FBasePath;
+    property Route: TmnRoute read FRoute write FRoute;
 
     property NameSpace: string read FNameSpace write FNameSpace;
-    property Directory: String read FDirectory write FDirectory;
-    property Route: TmnRoute read FRoute write FRoute;
     
-    property Params: TmodParams read FArguments; //deprecated 'use Arguments';
-    property Arguments: TmodParams read FArguments; //alias
+    property Params: TmnFields read FParams; 
+    property Param[Index: string]: TmnField read GetParam; default; 
 
     function CollectURI: string;
-
+    //Delete Route[0] and CurrentPath
+    // /p1/p2/   --> /p2/
+    function PopSubPath(const CheckValue: string = ''): string;
     //
     property ChunkedProxy: TmnChunkStreamProxy read FChunkedProxy write SetChunkedProxy;
 
@@ -381,6 +400,9 @@ type
     property ProtcolProxy: TmnProtcolStreamProxy read FProtcolProxy write FProtcolProxy;
 
     property Connected: Boolean read GetConnected;
+  public
+    property ContentType: string read FContentType;
+    property Charset: string read FCharset;
   end;
 
   TmodFileDisposition = (
@@ -403,6 +425,7 @@ type
     FAnswer: TmodAnswer;
     FContentType: String;
     FDispositionFile: string;
+    FCharset: string;
   protected
     FRequest: TmodRequest;
     procedure SetAnswer(const Value: TmodAnswer); virtual;
@@ -410,7 +433,7 @@ type
     function GetStream: TmnBufferStream; override;
     procedure InitProtocol; override;
   public
-    constructor Create(ARequest: TmodRequest); //need trigger event
+    constructor Create(ARequest: TmodRequest); virtual; //need trigger event
     function WriteString(const s: string): Boolean;
     function WriteLine(const s: string): Boolean;
 
@@ -428,6 +451,7 @@ type
 
     property Request: TmodRequest read FRequest;
     property ContentType: string read FContentType write FContentType;
+    property Charset: string read FCharset write FCharset;
     property DispositionFile: string read FDispositionFile write FDispositionFile;
     property Answer: TmodAnswer read FAnswer write SetAnswer;
   end;
@@ -501,6 +525,8 @@ type
     FHost: string;
     FOrigin: string;
     FUserAgent: UTF8String;
+    FDomain: string;
+    FPort: string;
   protected
     procedure DoPrepareHeader; override; //Called by Client
     procedure DoSendHeader; override;
@@ -513,6 +539,8 @@ type
     property Origin: string read FOrigin write FOrigin;
     property Accept: String read FAccept write FAccept;
     property UserAgent: UTF8String read FUserAgent write FUserAgent;
+    property Domain: string read FDomain;
+    property Port: string read FPort;
   end;
 
   { TwebResponse }
@@ -520,8 +548,8 @@ type
   TwebResponse = class(TmodResponse)
   private
     FRedirect: string;
-    FHomeFolder: string;
-    FIsResponded: Boolean; //Document root folder
+    FPublicPath: string;
+    FIsResponded: Boolean; //Document root Dir
     //FCompressed: Boolean;
     function GetRequest: TwebRequest;
     procedure SetIsResponded(const Value: Boolean);
@@ -536,8 +564,8 @@ type
     function StatusResult: string;
     function StatusVersion: string;
 
-    //Document root folder
-    property HomeFolder: string read FHomeFolder write FHomeFolder;
+    //Document root Dir
+    property PublicPath: string read FPublicPath write FPublicPath;
 
     property Request: TwebRequest read GetRequest;
     property Redirect: string read FRedirect write FRedirect; //Relocation it to another url
@@ -545,14 +573,19 @@ type
     procedure Responded; overload; virtual; 
     procedure Respond(AAnswer: TmodAnswer); overload; 
     procedure Respond(AAnswer: TmodAnswer; AContentType: string); overload; 
-    procedure RespondText(S: string);    
+    procedure RespondText(S: string; AAnswer: TmodAnswer = hrOK);    
     procedure RespondHTML(S: string);    
-    procedure RespondJSON(S: string; AAnswer: TmodAnswer = hrOK);
+    procedure RespondJSON(S: string; AAnswer: TmodAnswer = hrOK); overload;
+    procedure RespondJSON(ResultType, State, Message: string; AAnswer: TmodAnswer = hrOK); overload;
+    procedure RespondJSON(ResultType, State, Message: string; Redirect: string;AAnswer: TmodAnswer = hrOK); overload;
+    
+    procedure RespondCSV(S: string; AAnswer: TmodAnswer = hrOK);
     procedure RespondNoContent;
     procedure RespondNotFound;
     procedure RespondForbidden;
     procedure RespondUnauthorized;
-    procedure RespondRedirectTo(S: string);
+    procedure RespondRedirectTo(NewURL: string; WithQuery: Boolean = False);
+    procedure RespondRedirectBack(FallbackURL: string; WithQuery: Boolean = False);
     property IsResponded: Boolean read FIsResponded write SetIsResponded;
   end;
 
@@ -632,11 +665,11 @@ type
     function GetCommandClass(var CommandName: String): TwebCommandClass; virtual;
     procedure Created; override;
     procedure InitItems; virtual; //TODO rename it to Init
-    procedure DoMatch(const ARequest: TmodRequest; var vMatch: Boolean); virtual;
-    procedure DoPrepareRequest(ARequest: TmodRequest); virtual;
+    procedure DoMatch(ARequest: TmodRequest; var vMatch: Boolean); virtual;
+    procedure DoMatched(ARequest: TmodRequest); virtual;
 
-    function Match(const ARequest: TmodRequest): Boolean; virtual;
-    procedure PrepareRequest(ARequest: TmodRequest);
+    function Match(ARequest: TmodRequest): Boolean; 
+    procedure Matched(ARequest: TmodRequest);
     function CreateCommand(CommandName: String; ARequest: TmodRequest): TwebCommand; overload;
 
     function RequestCommand(ARequest: TmodRequest): TwebCommand; virtual;
@@ -811,8 +844,6 @@ type
     procedure Terminate; virtual;
     procedure AfterConstruction; override;
     property Terminated: Boolean read FTerminated;
-    procedure Enter;
-    procedure Leave;
 
     property Name: string read FName;
   end;
@@ -834,7 +865,7 @@ type
   private
     FCurrent: TmnPoolObject;
 
-    FLock: TCriticalSection;
+    FLock: TMREWSync;
     FEvent: TEvent;
     FWaitEvent: TEvent;
 
@@ -850,8 +881,8 @@ type
     constructor Create;
     destructor Destroy; override;
     property PoolList: TPoolList read FPoolList;
-    property Lock: TCriticalSection read FLock;
-    function FindName(vClass: TPoolObjectClass; const vName: string): Boolean;
+    property Lock: TMREWSync read FLock;
+    function IsExists(vClass: TPoolObjectClass; const vName: string): Boolean;
     procedure SkipClass(vClass: TPoolObjectClass);
     procedure TerminateSet; virtual;
     property Terminated: Boolean read FTerminated;
@@ -879,13 +910,13 @@ function ParseHttpHead(const Raw: String; out Method, Params: string): Boolean; 
 //HTTP/1.1 200 OK
 function ParseAnswerHead(const Raw: String; out Number: Integer; out Protocol, Msg: string): Boolean; overload;
 function ParseAnswerHead(const Raw: String; out Answer: TmodAnswer; Msg: string): Boolean; overload;
-function ParseURI(const URI: String; out Address, Params: string): Boolean;
+function ParseURI(const URI: String; out Path, Params: string): Boolean;
 procedure ParseQuery(const Query: String; mnParams: TmnFields);
 procedure ParseParamsEx(const Params: String; mnParams: TmnParams);
 
-function ParseAddress(const Request: string; out URIPath: string; out URIQuery: string): Boolean; overload;
-function ParseAddress(const Request: string; out URIPath: string; out URIParams: string; URIQuery: TmnParams): Boolean; overload;
-procedure ParsePath(const aRequest: string; out Name: string; out URIPath: string; out URIParams: string; URIQuery: TmnParams);
+//function ParsePath(const Request: string; out URIPath: string; out URIQuery: string): Boolean; overload;
+//function ParsePath(const Request: string; out URIPath: string; out URIParams: string; URIQuery: TmnParams): Boolean; overload;
+//procedure ParsePath(const aRequest: string; out Name: string; out URIPath: string; out URIParams: string; URIQuery: TmnParams);
 function FormatHTTPDate(vDate: TDateTime): string;
 function ExtractDomain(const URI: string): string;
 
@@ -893,8 +924,8 @@ function GetSubPath(const Path: string): string;
 function DeleteSubPath(const SubKey, Path: string): string;
 function StartsSubPath(const SubKey, Path: string): Boolean;
 
-function ComposeHttpURL(IsSecure: Boolean; const DomainName: string; const Port: string = ''; const Directory: string = ''): string; overload;
-function ComposeHttpURL(const Protocol, DomainName: string; const Port: string = ''; const Directory: string = ''): string; overload;
+function ComposeHttpURL(IsSecure: Boolean; const DomainName: string; const Port: string = ''; const Path: string = ''): string; overload;
+function ComposeHttpURL(const Protocol, DomainName: string; const Port: string = ''; const Path: string = ''): string; overload;
 
 function HashWebSocketKey(const key: string): string;
 
@@ -905,11 +936,7 @@ const
   sMiniLibServer = 'minilib.server/v1';
 
 var
-  DeveloperMode:Boolean = False;
   ClientCacheMode:Boolean = False; //Move it to Module
-  
-  InstanceDate: TDateTime = 0;
-  InstanceUID: TGUID;
 
 function OptionValue(Value: TmodOptionValue): Boolean; overload; inline;
 function OptionValue(Value: Boolean): TmodOptionValue; overload; inline;
@@ -917,7 +944,7 @@ function OptionValue(Value: Boolean): TmodOptionValue; overload; inline;
 implementation
 
 uses
-  mnUtils;
+  mnUtils, mnLogs;
 
 function OptionValue(Value: TmodOptionValue): Boolean;
 begin
@@ -942,25 +969,107 @@ begin
   Result := FRegisteredModules;
 end;
 
-function ComposeHttpURL(IsSecure: Boolean; const DomainName: string; const Port: string = ''; const Directory: string = ''): string; overload;
+function ComposeHttpURL(IsSecure: Boolean; const DomainName: string; const Port: string = ''; const Path: string = ''): string; overload;
 begin
   if IsSecure then
-    Result := ComposeHttpURL('https', DomainName, Port, Directory)
+    Result := ComposeHttpURL('https', DomainName, Port, Path)
   else
-    Result := ComposeHttpURL('http', DomainName, Port, Directory);
+    Result := ComposeHttpURL('http', DomainName, Port, Path);
 end;
 
-function ComposeHttpURL(const Protocol, DomainName: string; const Port: string = ''; const Directory: string = ''): string; overload;
+function ComposeHttpURL(const Protocol, DomainName: string; const Port: string = ''; const Path: string = ''): string; overload;
 begin
   Result := Protocol + '://' + DomainName;
 
   if (Port<>'') and (((Protocol='https') and (Port<>'443')) or ((Protocol='http') and (Port<>'80'))) then
     Result := Result + ':' + Port;
 
-  if Directory <> '' then
-    Result := Result + '/' + Directory;
+  if Path <> '' then
+    Result := Result + '/' + Path;
 end;
 
+//Writen by GLM 5.2
+// Helper to manually parse hex characters (avoids string allocations and StrToIntDef)
+function HexCharToByte(C: Byte): Integer; inline;
+begin
+  case C of
+    Ord('0')..Ord('9'): Result := C - Ord('0');
+    Ord('A')..Ord('F'): Result := C - Ord('A') + 10;
+    Ord('a')..Ord('f'): Result := C - Ord('a') + 10;
+  else
+    Result := -1; // Invalid hex character
+  end;
+end;
+
+function URIDecode(const S: UTF8String): UTF8String;
+var
+  i, Len, ByteIdx, V1, V2: Integer;
+  C: Byte;
+  P: PByte;
+begin
+  Len := Length(S);
+  SetLength(Result, Len); // Pre-allocate max possible length
+  if Len = 0 then Exit;
+
+  // Use a PByte pointer to write directly to memory, bypassing all string manager overhead
+  P := PByte(Result);
+  ByteIdx := 0;
+  i := 1;
+
+  while i <= Len do
+  begin
+    C := Ord(S[i]);
+    
+    if C = Ord('+') then
+    begin
+      P[ByteIdx] := Ord(' ');
+      Inc(ByteIdx);
+      Inc(i);
+    end
+    else if C = Ord('%') then
+    begin
+      // Ensure we don't read past the end of the string
+      if i + 2 <= Len then
+      begin
+        V1 := HexCharToByte(Ord(S[i + 1]));
+        V2 := HexCharToByte(Ord(S[i + 2]));
+        
+        // If both are valid hex digits, decode the byte
+        if (V1 >= 0) and (V2 >= 0) then
+        begin
+          P[ByteIdx] := (V1 shl 4) or V2;
+          Inc(ByteIdx);
+          Inc(i, 3);
+        end
+        else
+        begin
+          // Malformed hex (e.g., '%GG'), keep '%' as is
+          P[ByteIdx] := C;
+          Inc(ByteIdx);
+          Inc(i);
+        end;
+      end
+      else
+      begin
+        // Malformed encoding (e.g., '%' at the end), keep '%' as is
+        P[ByteIdx] := C;
+        Inc(ByteIdx);
+        Inc(i);
+      end;
+    end
+    else
+    begin
+      P[ByteIdx] := C;
+      Inc(ByteIdx);
+      Inc(i);
+    end;
+  end;
+
+  // Trim the result to the actual decoded length
+  SetLength(Result, ByteIdx);
+end;
+
+{
 function URIDecode(const S: UTF8String): utf8string;
 var
   c: AnsiChar;
@@ -982,7 +1091,7 @@ begin
     if C = '%' then
     begin
       D := copy(S, i + 1, 2);
-      R := R + AnsiChar(StrToIntDef('$'+D, 0));
+      R := R + WideChar(StrToIntDef('$'+D, 0));
       inc(i, 2);
     end
     else
@@ -992,7 +1101,7 @@ begin
   //SetCodePage(R, CP_UTF8, False);
   Result := R;
 end;
-
+}
 function ParseHttpHead(const Raw: String; out Method, Params, Protocol: string): Boolean;
 var
   aRequests: TStringList;
@@ -1040,19 +1149,19 @@ begin
   Answer.FromNumber(Number);
 end;
 
-function ParseURI(const URI: String; out Address, Params: string): Boolean;
+function ParseURI(const URI: String; out Path, Params: string): Boolean;
 var
   J: Integer;
 begin
   J := Pos('?', URI);
   if J > 0 then
   begin
-    Address := Copy(URI, 1, J - 1);
+    Path := Copy(URI, 1, J - 1);
     Params := Copy(URI, J + 1, Length(URI));
   end
   else
   begin
-    Address := URI;
+    Path := URI;
     Params := '';
   end;
   Result := True;
@@ -1068,7 +1177,7 @@ begin
   StrToStringsCallback(Query, mnParams, @FieldsCallBack, ['&'], [' ']);
 end;
 
-function ParseAddress(const Request: string; out URIPath: string; out URIQuery: string): Boolean;
+(*function ParsePath(const Request: string; out URIPath: string; out URIQuery: string): Boolean;
 var
   I, J: Integer;
 begin
@@ -1103,23 +1212,23 @@ begin
   begin
     URIQuery := '';
   end;
-end;
+end;*)
 
-function ParseAddress(const Request: string; out URIPath: string; out URIParams: string; URIQuery: TmnParams): Boolean;
+{function ParsePath(const Request: string; out URIPath: string; out URIParams: string; URIQuery: TmnParams): Boolean;
 begin
-  Result := ParseAddress(Request, URIPath, URIParams);
+  Result := ParsePath(Request, URIPath, URIParams);
   if Result then
     if URIQuery <> nil then
       //ParseParams(aParams, False);
       StrToStringsCallback(URIParams, URIQuery, @FieldsCallBack, ['&'], [' ']);
-end;
+end;}
 
-procedure ParsePath(const aRequest: string; out Name: string; out URIPath: string; out URIParams: string; URIQuery: TmnParams);
+{procedure ParsePath(const aRequest: string; out Name: string; out URIPath: string; out URIParams: string; URIQuery: TmnParams);
 begin
   ParseAddress(aRequest, URIPath, URIParams, URIQuery);
   Name := SubStr(URIPath, URLDelimiter, 0);
   URIPath := Copy(URIPath, Length(Name) + 1, MaxInt);
-end;
+end;}
 
 function FormatHTTPDate(vDate: TDateTime): string;
 begin
@@ -1169,9 +1278,17 @@ end;
 function DeleteSubPath(const SubKey, Path: string): string;
 begin
   if StartsText(URLDelimiter, Path) then
+  begin
+    if Copy(Path, 2, Length(SubKey)) <> SubKey then
+      raise Exception.Create('Can not DeleteSubPath subkey is not match ' + SubKey);    
     Result := Copy(Path, Length(URLDelimiter) + Length(SubKey) + 1, MaxInt)
+  end
   else
+  begin
+    if Copy(Path, 1, Length(SubKey)) <> SubKey then
+      raise Exception.Create('Can not DeleteSubPath subkey is not match ' + SubKey);    
     Result := Copy(Path, Length(SubKey) + 1, MaxInt);
+  end;
 end;
 
 function StartsSubPath(const SubKey, Path: string): Boolean;
@@ -1205,6 +1322,7 @@ constructor TmodResponse.Create(ARequest: TmodRequest);
 begin
   inherited Create(ARequest.Parent);
   FRequest := ARequest;
+  FCharset := 'utf-8';
 end;
 
 procedure TmodResponse.InitProtocol;
@@ -1291,8 +1409,6 @@ var
   end;
 
 begin
-  Result := False;
-
   if ASize = 0 then
   begin
     _SendHeader(0, False);
@@ -1380,8 +1496,6 @@ var
   mStream: TMemoryStream;
   zStream: {$ifdef FPC}TGZipCompressionStream{$else}TZCompressionStream{$endif};
 begin
-  Result := False;
-
   if Count = 0 then
   begin
     _SendHeader(0, False);
@@ -1586,7 +1700,7 @@ end;
 
 function TmodRequest.CollectURI: string;
 begin
-  Result := URLDelimiter + Address;
+  Result := URLDelimiter + Path;
   if Query<>'' then
     Result := Result+'?'+Query
 end;
@@ -1604,15 +1718,25 @@ procedure TmodRequest.Created;
 begin
   inherited;
   FRoute := TmnRoute.Create;
-//  FNameSpace := TStringList.Create;
-  FArguments := TmodParams.Create;
+  FRoute.Delimiter := URLDelimiter;
+  FParams := TmnFields.Create;
+end;
+
+function TmodRequest.PopSubPath(const CheckValue: string): string;
+begin
+  Result := Route[0];
+  if (CheckValue <> '') and not SameText(Result, CheckValue) then
+    raise Exception.Create('PopSubPath dosnt match value');  
+  Route.Delete(0);
+  Route.FIsRooted := False;
+  FCurrentPath := DeleteSubPath(Result, FCurrentPath);
+  FBasePath := AddEndURLDelimiter(FBasePath) + AddEndURLDelimiter(Result);
 end;
 
 destructor TmodRequest.Destroy;
 begin
   FreeAndNil(FRoute);
-//  FreeAndNil(FNameSpace);
-  FreeAndNil(FArguments);
+  FreeAndNil(FParams);
   inherited Destroy;
 end;
 
@@ -1664,7 +1788,6 @@ end;
 
 procedure TmodRequest.DoHeaderReceived;
 begin
-  //????
 end;
 
 procedure TmodRequest.InitProtocol;
@@ -1676,6 +1799,11 @@ end;
 function TmodRequest.GetConnected: Boolean;
 begin
   Result := (Stream <> nil) and Stream.Connected;
+end;
+
+function TmodRequest.GetParam(Index: string): TmnField;
+begin
+  Result := Params.Field[Index];
 end;
 
 function TmodRequest.GetStream: TmnBufferStream;
@@ -1756,7 +1884,7 @@ end;
 procedure TmodModuleConnection.HandleException(E: Exception);
 begin
   inherited;
-  //ModuleServer.Log(E.Message);
+  Log.WriteLn(lglError, E.Message);
 end;
 
 procedure TmodModuleConnection.Prepare;
@@ -1791,7 +1919,10 @@ begin
       aRequest.Client := RemoteIP;
       aRequest.IsSecure := IsSecure;
       if (aModule = nil) then
-        Stream.Disconnect //if failed, or no fallback module
+      begin
+        Stream.Disconnect; //if failed, or no fallback module
+        Log.WriteLn(lglWarning, 'Disconnected no module found: ' + aRequest.Info.URI);
+      end
       else
       begin
         Result.Status := [];
@@ -2056,7 +2187,7 @@ procedure TwebCommand.Prepare(var Result: TmodRespondResult);
 var
   //aKeepAlive: Boolean;
   WSHash, WSKey: string;
-  SendHostHeader: Boolean;
+  //SendHostHeader: Boolean;
 begin
   if Request.Header.Field['Connection'].Have('Upgrade', [',']) then
   begin
@@ -2065,7 +2196,7 @@ begin
       if Request.Header['Sec-WebSocket-Version'].ToInteger = 13 then
       begin
         WSHash := Request.Header['Sec-WebSocket-Key'];
-        SendHostHeader := Request.Header.ReadBool('X-Send-Server-Hostname', True);
+        //SendHostHeader := Request.Header.ReadBool('X-Send-Server-Hostname', True);
 
         WSKey := HashWebSocketKey(WSHash);
         Response.Answer := hrSwitchingProtocols;
@@ -2308,18 +2439,23 @@ begin
 
 end;
 
-procedure TmodModule.DoPrepareRequest(ARequest: TmodRequest);
+procedure TmodModule.DoMatch(ARequest: TmodRequest; var vMatch: Boolean);
 begin
+  vMatch := (AliasName <> '') and (ARequest.Route[0] = AliasName);
+end;
+
+procedure TmodModule.DoMatched(ARequest: TmodRequest);
+begin
+  ARequest.Command := ARequest.Method; //TODO move to Matched
   if (AliasName <> '') then
-    ARequest.Path := DeleteSubPath(ARequest.Route[0], ARequest.Path);
+  begin
+//    ARequest.CurrentPath := DeleteSubPath(ARequest.Route[0], ARequest.CurrentPath);
+    ARequest.PopSubPath(AliasName);
+    //TODO delete route[0]  or use PopSubPath
+  end;    
 end;
 
-procedure TmodModule.DoMatch(const ARequest: TmodRequest; var vMatch: Boolean);
-begin
-  vMatch := (AliasName<>'') and (ARequest.Route[0] = AliasName);
-end;
-
-function TmodModule.Match(const ARequest: TmodRequest): Boolean;
+function TmodModule.Match(ARequest: TmodRequest): Boolean;
 begin
   //Result := SameText(AliasName, ARequest.Module) and ((Protocols = nil) or StrInArray(ARequest.Protocol, Protocols));
   Result := False;
@@ -2327,6 +2463,16 @@ begin
   begin
     DoMatch(ARequest, Result);
   end;
+end;
+
+procedure TmodModule.Matched(ARequest: TmodRequest);
+begin
+  ARequest.Params.Clear;
+  ParseQuery(ARequest.Query, ARequest.Params);
+
+  ARequest.Params['Module'] := AliasName;
+  ARequest.Params['ModuleName'] := Name;
+  DoMatched(ARequest);
 end;
 
 procedure TmodModule.Log(S: String);
@@ -2385,16 +2531,6 @@ begin
         raise EmodModuleException.Create('Can not find command or fallback command: ' + ARequest.Command);
     end;
   end;
-end;
-
-procedure TmodModule.PrepareRequest(ARequest: TmodRequest);
-begin
-  ARequest.Params.Clear;
-  ParseQuery(ARequest.Query, ARequest.Params);
-
-  ARequest.Params['Module'] := AliasName;
-  ARequest.Params['ModuleName'] := Name;
-  DoPrepareRequest(ARequest);
 end;
 
 procedure TmodModule.SetAliasName(AValue: String);
@@ -2545,17 +2681,17 @@ end;
 procedure TmodModules.ParseHead(ARequest: TmodRequest; const AHead: String);
 begin
   ARequest.Clear;
-  ARequest.Raw := AHead;
+  ARequest.Info.Raw := AHead;
   ParseHttpHead(AHead, ARequest.Info.Method, ARequest.Info.URI, ARequest.Info.Protocol);
-  ParseURI(ARequest.URI, ARequest.Info.Address, ARequest.Info.Query);
+  ParseURI(ARequest.URI, ARequest.Info.Path, ARequest.Info.Query);
 
-  // Remove leading slash from Address for Path, unless Address is empty or just '/'
-  if (ARequest.Address <> '') and (ARequest.Address <> '/') and StartsText(URLDelimiter, ARequest.Address) then
-    ARequest.Path := Copy(ARequest.Address, 2, MaxInt)
+  ARequest.Route.FIsRooted := StartsDelimiter(ARequest.Path);
+  // Remove leading slash from Path, unless Path is empty or just '/'
+  if (ARequest.Path <> '') and (ARequest.Path <> '/') and StartsText(URLDelimiter, ARequest.Path) then
+    ARequest.FCurrentPath := Copy(ARequest.Path, 2, MaxInt)
   else
-    ARequest.Path := ARequest.Address;
-
-  StrToStrings(ARequest.Path, ARequest.Route, ['/']);
+    ARequest.FCurrentPath := ARequest.Path;
+  StrToStrings(ARequest.CurrentPath, ARequest.Route, ['/']);
 end;
 
 function TmodModules.Match(ARequest: TmodRequest): TmodModule;
@@ -2584,8 +2720,8 @@ begin
 
   if aModule <> nil then
   begin
-    //item.PrepareRequest(ARequest); //always have params
-    aModule.PrepareRequest(ARequest);
+    //item.Matched(ARequest); //always have params
+    aModule.Matched(ARequest);
     Result := aModule;
   end;
 end;
@@ -2647,7 +2783,7 @@ procedure TmnwCookie.Created;
 begin
   inherited;
   FAge := -1; //Forever
-  Secured := False; //over HTTP and HTTPS
+  FOptions := []; //over HTTP and HTTPS
 end;
 
 procedure TmnwCookie.Delete;
@@ -2670,14 +2806,18 @@ begin
       Result := Result + '; max-age=' + Age.ToString;
   end;
 
-  if Secured then
-    Result := Result + '; Secure';
-
-  if Stricted then
+  if Stricted in Options then
     Result := Result + '; SameSite=Strict'
   else
-    Result := Result + '; SameSite=None';
+    Result := Result + '; SameSite=Lax'; //NONE needs https
 
+  if Secured in Options then
+    Result := Result + '; Secure';
+  if HttpOnly in Options then
+    Result := Result + '; HttpOnly';  
+  if HostOnly in Options then
+    Result := Result + '; HostOnly';  
+    
   if Domain <> '' then
     Result := Result + '; Domain=' + Domain.ToLower;
 
@@ -2714,6 +2854,14 @@ begin
     FDomain := AValue;
     SetChanged;
   end;
+end;
+
+procedure TmnwCookie.SetOptions(const Value: TmnwCookieOptions);
+begin
+  if Value = FOptions then  
+    exit;
+  FOptions := Value;
+  FChanged := True;
 end;
 
 procedure TmnwCookie.SetPath(const AValue: string);
@@ -2760,6 +2908,27 @@ begin
       (TObject(Sender) as TmnwCookies).Add(Name, Value);
     end;
   end;
+end;
+
+function TmnwCookies.SetCookie(const Domain, Path: string; const Name: string; const Value: string; Options: TmnwCookieOptions; Age: Integer): TmnwCookie;
+var
+  index: Integer;
+begin
+  //We dont auto delete of value = '' to set session to delete it in browser
+  index := IndexOfName(Name);
+  if index >= 0 then
+  begin
+    Result := Items[index];
+    Result.Value := Value;
+  end
+  else
+    Result := Add(Name, Value);
+  Result.FDomain := Domain; //Yes F for not trigger changed
+  Result.FPath := Path;
+  Result.FAge := Age;
+  Result.FOptions := Options;
+  if not Result.Changed then    
+    Result.SetChanged;
 end;
 
 procedure TmnwCookies.SetRequestText(S: string);
@@ -2817,7 +2986,7 @@ end;
 
 function TmodCommunicate.GetCookie(const vNameSpace, vName: string): string;
 begin
-  if vNameSpace<>'' then
+  if vNameSpace <> '' then
     Result := Cookies.Values[vNameSpace+'.'+vName]
   else
     Result := Cookies.Values[vName];
@@ -2877,21 +3046,13 @@ procedure TmodCommunicate.DoSendHeader;
 begin
 end;
 
-procedure TmodCommunicate.DoWriteCookies;
+procedure TmodCommunicate.DoSetCookies;
 begin
 end;
 
-procedure TmodCommunicate.SetCookie(const vNameSpace, vName, Value: string);
+function TmodCommunicate.SetCookie(const vName, Value: string): TmnwCookie;
 begin
-  if vNameSpace<>'' then
-    Cookies.Values[vNameSpace+'.'+vName] := Value
-  else
-    Cookies.Values[vName] := Value;
-end;
-
-procedure TmodCommunicate.SetCookie(const vName, Value: string);
-begin
-  SetCookie('', vName, Value);
+  Result := Cookies.SetCookie('', '', vName, Value);
 end;
 
 procedure TmodCommunicate.SetHead(const Value: string);
@@ -2933,6 +3094,8 @@ begin
   if Parent<> nil then
     Parent.DoPrepareHeader(Self);
 
+  DoSetCookies;
+
   SendHead;
 
   for item in Header do
@@ -2948,8 +3111,6 @@ begin
     s := s + item.GetNameValue(': ');
   end;
   Stream.WriteUTF8Line(s);}
-
-  DoWriteCookies;
 
   DoSendHeader; //enter after
 
@@ -3072,6 +3233,14 @@ begin
   end;
 end;
 
+function TmnRoute.ToPath: string;
+begin
+  if IsRooted then  
+    Result := AddStartURLDelimiter(DelimitedText)
+  else
+    Result := DelimitedText
+end;
+
 { TmodHeader }
 
 procedure TmodHeader.Clear;
@@ -3136,6 +3305,7 @@ begin
   inherited;
 
   FHost  := Header.Field['Host'].AsString;
+  SplitStr(FHost, ':', FDomain, FPort);
   FOrigin  := DequoteStr(Header.Field['Origin'].AsString);
   Stamp  := DequoteStr(Header.Field['If-None-Match'].AsString);
 
@@ -3144,6 +3314,12 @@ begin
   else
     ContentLength := 0;
 
+  if (Header.Field['Content-Type'].IsExists) then
+  begin
+    FContentType  := Header.Field['Content-Type'].SubValue('');
+    FCharset := Header.Field['Content-Type'].SubValue('Charset');
+  end;
+    
   Cookies.SetRequestText(Header['Cookie']);
 
   FAccept := Header.ReadString('Accept'); //TODO zaher check it
@@ -3245,7 +3421,10 @@ begin
     ContentLength := Header.Field['Content-Length'].AsInt64;
 
   if (Header.Field['Content-Type'].IsExists) then
-    ContentType  := Header.Field['Content-Type'].AsString;
+  begin
+    Charset := Header.Field['Content-Type'].SubValue('Charset');
+    ContentType  := Header.Field['Content-Type'].SubValue('');
+  end;
 
   if (Header.Field['Content-Disposition'].IsExists) then
   begin
@@ -3274,7 +3453,12 @@ begin
     PutHeader('Content-Length', IntToStr(ContentLength));
 
   if (ContentType <> '') then
-    PutHeader('Content-Type', ContentType);
+  begin
+    if Charset <> '' then
+      PutHeader('Content-Type', ContentType + '; Charset=' + Charset)
+    else
+      PutHeader('Content-Type', ContentType);
+  end;
 
   if (Stamp <> '') then
     PutHeader('ETag', QuoteStr(Stamp));
@@ -3339,17 +3523,28 @@ begin
   Result := SubStr(Head, ' ', 0);
 end;
 
-procedure TwebResponse.RespondRedirectTo(S: string);
+procedure TwebResponse.RespondRedirectBack(FallbackURL: string; WithQuery: Boolean);
+var
+  aReferer: string;
+begin
+  aReferer := Request.Header['Referer'];
+  RespondRedirectTo(aReferer);
+end;
+
+procedure TwebResponse.RespondRedirectTo(NewURL: string; WithQuery: Boolean);
 begin
   Answer := hrRedirect;
-  Redirect := S;
+  if WithQuery and (Request.Query <> '') then  
+    Redirect := NewURL + '?' + Request.Query
+  else
+    Redirect := NewURL;
   SendHeader;
   Responded;
 end;
 
-procedure TwebResponse.RespondText(S: string);
+procedure TwebResponse.RespondText(S: string; AAnswer: TmodAnswer);
 begin
-  Answer := hrOK;
+  Answer := AAnswer;
   ContentType := 'text/plain';
   SendUTF8String(S);
   Responded;
@@ -3367,6 +3562,14 @@ procedure TwebResponse.Respond(AAnswer: TmodAnswer; AContentType: string);
 begin
   ContentType := AContentType;
   Respond(AAnswer);  
+end;
+
+procedure TwebResponse.RespondCSV(S: string; AAnswer: TmodAnswer);
+begin
+  Answer := AAnswer;
+  ContentType := DocumentToContentType('.csv');
+  SendUTF8String(S);
+  Responded;
 end;
 
 procedure TwebResponse.Responded;
@@ -3396,12 +3599,22 @@ begin
   Responded;
 end;
 
+procedure TwebResponse.RespondJSON(ResultType, State, Message, Redirect: string; AAnswer: TmodAnswer);
+begin
+  RespondJSON('{"type": "' + ResultType + '", "state": "' + State + '", "message": "' + Message + '", "redirect":"'+EscapeJSONString(Redirect)+'"}', AAnswer);
+end;
+
 procedure TwebResponse.RespondJSON(S: string; AAnswer: TmodAnswer);
 begin
   Answer := AAnswer;
   ContentType := DocumentToContentType('.json');
   SendUTF8String(S);
   Responded;
+end;
+
+procedure TwebResponse.RespondJSON(ResultType, State, Message: string; AAnswer: TmodAnswer);
+begin
+  RespondJSON('{"type": "' + ResultType + '", "state": "' + State + '", "message": "' + Message + '"}', AAnswer);
 end;
 
 procedure TwebResponse.RespondNoContent;
@@ -3534,25 +3747,15 @@ procedure TmnPoolObject.DoUnprepare;
 begin
 end;
 
-procedure TmnPoolObject.Enter;
-begin
-  FPool.Lock.Enter;
-end;
-
 procedure TmnPoolObject.Execute;
 begin
   DoProcess;
-  FPool.Lock.Enter;
+  FPool.Lock.BeginWrite;
   try
     FPool.FTaskList.Extract(Self);
   finally
-    FPool.Lock.Leave;
+    FPool.Lock.EndWrite;
   end;
-end;
-
-procedure TmnPoolObject.Leave;
-begin
-  FPool.Lock.Leave;
 end;
 
 procedure TmnPoolObject.Terminate;
@@ -3585,14 +3788,14 @@ var
 begin
   while not FTerminated do
   begin
-    Lock.Enter;
+    Lock.BeginWrite;
     try
       if PoolList.Count <> 0 then
         FCurrent := PoolList.Extract(PoolList.First) { TODO : try use PoolList as queue }
       else
         FCurrent := nil;
     finally
-      Lock.Leave;
+      Lock.EndWrite;
     end;
 
     if FCurrent <> nil then
@@ -3605,11 +3808,11 @@ begin
         end;
       finally
         aCurrent := FCurrent;
-        Lock.Enter;
+        Lock.BeginWrite;
         try
           FCurrent := nil;
         finally
-          Lock.Leave;
+          Lock.EndWrite;
         end;
         FreeAndNil(aCurrent);
         FWaitEvent.SetEvent;
@@ -3632,15 +3835,14 @@ end;
 
 procedure TmnPool.Add(vPoolObject: TmnPoolObject);
 begin
-  Lock.Enter;
+  Start;
+  Lock.BeginWrite;
   try
-    Start;
-
     PoolList.Add(vPoolObject);
     if PoolList.Count=1 then
       FEvent.SetEvent;
   finally
-    Lock.Leave;
+    Lock.EndWrite;
   end;
 end;
 
@@ -3650,7 +3852,7 @@ begin
   FStarted := False;
   FPoolList := TPoolList.Create;
   FTaskList := TPoolList.Create;
-  FLock := TCriticalSection.Create;
+  FLock := TMREWSync.Create;
   FEvent := TEvent.Create(nil, False, False, '');
   FWaitEvent := TEvent.Create(nil, True, True, '');
 end;
@@ -3667,23 +3869,23 @@ begin
   inherited;
 end;
 
-function TmnPool.FindName(vClass: TPoolObjectClass; const vName: string): Boolean;
+function TmnPool.IsExists(vClass: TPoolObjectClass; const vName: string): Boolean;
 var
   I: Integer;
 begin
   Result := False;
-  Lock.Enter;
+  Lock.BeginRead;
   try
     for I := 0 to PoolList.Count-1 do
     begin
-      if (PoolList[i].ClassType=vClass) and (PoolList[i].Name=vName) then
+      if (PoolList[i].ClassType = vClass) and (PoolList[i].Name = vName) then
       begin
         Result := True;
         Break;
       end;
     end;
   finally
-    Lock.Leave;
+    Lock.EndRead;
   end;
 end;
 
@@ -3706,11 +3908,11 @@ procedure TmnPool.SkipClass(vClass: TPoolObjectClass);
 var
   PoolObject: TmnPoolObject;
 begin
-  Lock.Enter;
+  Lock.BeginRead;
   try
     for PoolObject in PoolList do
     begin
-      if (PoolObject.ClassType=vClass) then
+      if (PoolObject.ClassType = vClass) then
         PoolObject.FSkip := True;
     end;
 
@@ -3721,7 +3923,7 @@ begin
       FCurrent.Terminate;
     end;
   finally
-    Lock.Leave;
+    Lock.EndRead;
   end;
 
   FWaitEvent.WaitFor;
@@ -3760,9 +3962,6 @@ begin
 end;
 
 initialization
-  //InstanceDate := Now;
-  FileAge(ParamStr(0), InstanceDate);
-  InstanceUID := TGUID.NewGuid;
 finalization
   FreeAndNil(FRegisteredModules);
 end.

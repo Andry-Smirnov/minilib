@@ -18,11 +18,13 @@ interface
 
 uses
   Classes, SysUtils, StrUtils, Types, DateUtils, SyncObjs, 
-  Generics.Collections, Contnrs;
+  Generics.Collections, Contnrs, RTTI;
 
 type
 
   {$IFDEF FPC} //*Temporary, To be compatiple with Delphi
+  TMREWSync = TMultiReadExclusiveWriteSynchronizer; //Short form
+
   TProc = Reference to procedure;
   TProc<T> = reference to procedure (Arg1: T);
   TProc<T1,T2> = reference to procedure (Arg1: T1; Arg2: T2);
@@ -186,7 +188,12 @@ type
       function GetValues(Index: string): string;
       procedure SetValues(Index: string; AValue: string);
     public
-      function Add(Name, Value: string): _Object_; overload;
+      function Add(Name: string; Value: string = ''): _Object_; overload;
+      function Add(Name: string; Value: Integer): _Object_; overload;
+      function Add(Name: string; Value: Boolean): _Object_; overload;
+      function AddIf(Condition: Boolean; Name: string; Value: TValue): _Object_; overload;
+      //If Value <> ''
+      function AddIf(Name: string; Value: TValue): _Object_; overload;
       property Values[Index: string]: string read GetValues write SetValues; default;
       property AutoRemove: Boolean read FAutoRemove write FAutoRemove;
     end;
@@ -233,6 +240,7 @@ type
     destructor Destroy; override;
     procedure Enter;
     procedure Leave;
+    property Lock: TCriticalSection read FLock;
   end;
     
 implementation
@@ -566,6 +574,29 @@ begin
   Result := FIndex < FList.Count;
 end;
 
+function TmnNameValueObjectList<_Object_>.Add(Name: string; Value: Integer): _Object_;
+begin
+  Result := Add(Name, Value.ToString);
+end;
+
+function TmnNameValueObjectList<_Object_>.Add(Name: string; Value: Boolean): _Object_;
+begin
+  Result := Add(Name, Value.ToString);
+end;
+
+function TmnNameValueObjectList<_Object_>.AddIf(Name: string; Value: TValue): _Object_;
+begin
+  Result := AddIf(Value.ToString <> '', Name, Value);  
+end;
+
+function TmnNameValueObjectList<_Object_>.AddIf(Condition: Boolean; Name: string; Value: TValue): _Object_;
+begin
+  if Condition then
+    Result := Add(Name, Value.ToString)
+  else
+    Result := nil;
+end;
+
 { TmnNameValueObjectList }
 
 function TmnNameValueObjectList<_Object_>.GetValues(Index: string): string;
@@ -763,8 +794,8 @@ end;
 
 destructor TmnLockThread.Destroy;
 begin
+  FreeAndNil(FLock);
   inherited;
-  FreeAndNil(FLock); //* it used in other inherited classes
 end;
 
 procedure TmnLockThread.Enter;

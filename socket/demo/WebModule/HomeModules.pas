@@ -14,7 +14,6 @@ uses
 	mnLogs, mnWebElements, mnBootstraps;
 
 type
-
   { TmySchema }
 
   TmySchema = class abstract(THTML)
@@ -22,9 +21,17 @@ type
     procedure DoCompose(const AContext: TmnwContext); override;
   end;
 
+  THomeSchema = class(TmySchema)
+  private
+  public
+  protected
+    procedure DoCompose(const AContext: TmnwContext); override;
+  public
+  end;
+  
   { TWelcomeSchema }
 
-  TWelcomeSchema = class(TmySchema)
+  TDemo1Schema = class(TmySchema)
   private
   protected
     Input1: THTML.TInput;
@@ -52,18 +59,18 @@ type
   private
   public
   protected
-    procedure DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+    procedure DoRespondHeader(const AContext: TmnwContext); override;
     procedure DoCompose(const AContext: TmnwContext); override;
   public
   end;
 
-  { TDemoSchema }
+  { TDemo2Schema }
 
-  TDemoSchema = class(THTML)
+  TDemo2Schema = class(THTML)
   private
   public
   protected
-    procedure DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+    procedure DoRespondHeader(const AContext: TmnwContext); override;
     procedure DoCompose(const AContext: TmnwContext); override;
   public
   end;
@@ -76,7 +83,6 @@ type
   protected     
     procedure DoCompose(const AContext: TmnwContext); override;
   public
-    class function GetCapabilities: TmnwSchemaCapabilities; override;
   end;
 
   { TFilesSchema }
@@ -117,7 +123,7 @@ type
 
   TClockCompose = class(THTML.TIntervalCompose)
   public
-    procedure InnerCompose(Inner: TmnwElement; AResponse: TmnwResponse); override;
+    procedure InnerCompose(Inner: TmnwElement; const Context: TmnwContext); override;
   end;
 
   TThreadTimer = class(TThread)
@@ -135,7 +141,7 @@ type
 
   TMyLink = class(THTML.TLink)
   public
-    procedure DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+    procedure DoRespondHeader(const AContext: TmnwContext); override;
     procedure DoExecute; override;
   end;
 
@@ -148,10 +154,10 @@ type
 
 { TMyLink }
 
-procedure TMyLink.DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TMyLink.DoRespondHeader(const AContext: TmnwContext);
 begin
   inherited;
-  AResponse.Responded;
+  AContext.Response.Responded;
 end;
 
 procedure TMyLink.DoExecute;
@@ -164,7 +170,7 @@ end;
 procedure TMyButton.DoExecute;
 begin
   inherited;
-  with (Schema as TWelcomeSchema) do
+  with (Schema as TDemo1Schema) do
   begin
     log.WriteLn('Clicked')
   end;
@@ -181,7 +187,7 @@ end;
 
 { TClockComposer }
 
-procedure TClockCompose.InnerCompose(Inner: TmnwElement; AResponse: TmnwResponse);
+procedure TClockCompose.InnerCompose(Inner: TmnwElement; const Context: TmnwContext);
 begin
   with THTML do
   begin
@@ -202,7 +208,7 @@ begin
   inherited;
 end;
 
-procedure TWelcomeSchema.AttachedMessage(const s: string);
+procedure TDemo1Schema.AttachedMessage(const s: string);
 begin
   inherited;
   Attachments.SendMessage('ECHO: '+s);
@@ -210,12 +216,12 @@ end;
 
 { TWellcomeSchema }
 
-procedure TWelcomeSchema.DoAccept(var AContext: TmnwContext; var Resume: Boolean);
+procedure TDemo1Schema.DoAccept(var AContext: TmnwContext; var Resume: Boolean);
 begin
   Resume := True;
 end;
 
-procedure TWelcomeSchema.DoCompose(const AContext: TmnwContext);
+procedure TDemo1Schema.DoCompose(const AContext: TmnwContext);
 begin
   inherited;
   RefreshInterval := 5;
@@ -223,7 +229,6 @@ begin
   with Document do
   begin
     Title := 'My Home';
-    Direction := dirLeftToRight;
     with Body do
     begin
       //TJSFile.Create(This, [ftResource], 'WebElements_JS', 'WebElements.js');
@@ -277,7 +282,7 @@ begin
           begin
             Name := 'logo';
             Route := 'logo';
-            LoadFromFile(IncludePathDelimiter(Schema.GetHomeFolder) + 'logo.png');
+            LoadFromFile(IncludePathDelimiter(Schema.GetPublicPath) + 'logo.png');
           end;
 
 {          with TImage.Create(This) do
@@ -328,9 +333,9 @@ begin
           with TIntervalCompose.Create(This) do
           begin
             Route := 'clock';
-            OnCompose := procedure(Inner: TmnwElement; AResponse: TmnwResponse)
+            OnCompose := procedure(Inner: TmnwElement; const Context: TmnwContext)
             begin
-              AResponse.Stamp := TimeToStr(Now);
+              Context.Response.Stamp := TimeToStr(Now);
               TParagraph.Create(Inner, TimeToStr(Now));
               {with TImage.Create(Inner) do
               begin
@@ -347,7 +352,7 @@ begin
   end;
 end;
 
-procedure TWelcomeSchema.DoPrepare;
+procedure TDemo1Schema.DoPrepare;
 begin
   inherited;
 
@@ -376,7 +381,7 @@ end;
 
 { TLoginSchema }
 
-procedure TLoginSchema.DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TLoginSchema.DoRespondHeader(const AContext: TmnwContext);
 var
   aUsername, aPassword: string;
 begin
@@ -386,8 +391,8 @@ begin
     begin
       aUsername := AContext.Data['username'].AsString;
       aPassword := AContext.Data['password'].AsString;
-      AResponse.Session.Value := aUsername +'/'+ aPassword;
-      AResponse.RespondRedirectTo(IncludePathDelimiter(AContext.GetPath) + 'dashboard');
+      AContext.Session.ID := aUsername +'/'+ aPassword;
+      AContext.Response.RespondRedirectTo(IncludePathDelimiter(AContext.GetPath) + 'dashboard');
     end;
   end;
   inherited;
@@ -400,8 +405,7 @@ begin
   begin
     //Name := 'document';
     //Route := 'document';
-    Title := 'MyHome';
-    Direction := dirLeftToRight;
+    Title := 'MyHome';    
 
     with Body do
     begin
@@ -446,9 +450,7 @@ begin
       end;
 
       with Main do
-      begin
-        Padding := 1;
-
+      begin        
         {with TNavBar.Create(This) do
         begin
           Caption := 'Nav2';
@@ -470,12 +472,11 @@ begin
           with TCard.Create(This) do
           begin
             Solitary := True;
-            Size := szNormal;
             Caption := 'Login';
 
             with TForm.Create(This) do
             begin
-              PostTo.Where := toElement;
+              Endpoint.Where := toElement;
 
               with TInput.Create(This) do
               begin
@@ -485,7 +486,7 @@ begin
                 PlaceHolder := 'Type user name';
               end;
 
-              with TInputPassword.Create(This) do
+              with TPassword.Create(This) do
               begin
                 ID := 'password';
                 Name := 'password';
@@ -506,9 +507,9 @@ begin
   end;
 end;
 
-{ TDemoSchema }
+{ TDemo2Schema }
 
-procedure TDemoSchema.DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TDemo2Schema.DoRespondHeader(const AContext: TmnwContext);
 var
   aUsername, aPassword: string;
 begin
@@ -518,22 +519,21 @@ begin
     begin
       aUsername := AContext.Data['username'].AsString;
       aPassword := AContext.Data['password'].AsString;
-      AResponse.Session.Value := aUsername +'/'+ aPassword;
-      AResponse.RespondRedirectTo(IncludePathDelimiter(AContext.GetPath) + 'dashboard');
+      AContext.Session.ID := aUsername +'/'+ aPassword;
+      AContext.Response.RespondRedirectTo(IncludePathDelimiter(AContext.GetPath) + 'dashboard');
     end;
   end;
   inherited;
 end;
 
-procedure TDemoSchema.DoCompose(const AContext: TmnwContext);
+procedure TDemo2Schema.DoCompose(const AContext: TmnwContext);
 var
   i: Integer;
 begin
   inherited;
   with Document do
   begin
-    Title := 'Demo Title';
-    Direction := dirLeftToRight;
+    Title := 'Demo Title';    
 
     with Body do
     begin
@@ -560,10 +560,7 @@ begin
 
           with Tools do
           begin
-            with TThemeModeButton.Create(This) do
-            begin
-              Caption := 'Mode';
-            end;
+            TThemeButton.Create(This);
 
             with TDropdown.Create(This) do
             begin
@@ -585,12 +582,8 @@ begin
         begin
           AlwaysOpen := True;
           with TBar.Create(This) do
-          begin
-            Padding := 2;
-            with TThemeModeButton.Create(This) do
-            begin
-              Caption := 'Mode';
-            end;
+          begin            
+            TThemeButton.Create(This);
           end;
 
           with TAccordionSection.Create(This) do
@@ -635,8 +628,6 @@ begin
 
       with Main do
       begin
-        Padding := 1;
-
         {with TNavBar.Create(This) do
         begin
           Caption := 'Nav2';
@@ -701,21 +692,18 @@ begin
               Collapse := True;
               Size := szVeryLarge;
               Caption := 'Empty';
-              //Solitary := True;
             end;
           end;
 
-         // ContentAlign := alignCenter;
           with TCard.Create(This) do
           begin
             Collapse := True;
-            Size := szNormal;
             Caption := 'Login';
             Solitary := True;
 
             with TForm.Create(This) do
             begin
-              PostTo.Where := toElement;
+              Endpoint.Where := toElement;
 
               with TInput.Create(This) do
               begin
@@ -725,7 +713,7 @@ begin
                 PlaceHolder := 'Type user name';
               end;
 
-              with TInputPassword.Create(This) do
+              with TPassword.Create(This) do
               begin
                 ID := 'password';
                 Name := 'password';
@@ -774,14 +762,24 @@ begin
     with TPanel.Create(this) do    
     begin
       Route := 'panel1';
-      TCode.Create(This, 'Context.Route: ' + AContext.Route);
+      TCode.Create(This, 'Context.CurrentPath: ' + AContext.CurrentPath);
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.Request.Path: ' + AContext.Request.Path);
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.Request.CurrentPath: ' + AContext.Request.CurrentPath);
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.Request.BasePath: ' + AContext.Request.BasePath);
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.Request.NameSpace: ' + AContext.Request.NameSpace);
+      TBreak.Create(This);
+      TCode.Create(This, 'Context.Request.NameSpace: ' + AContext.Request.NameSpace);
       TBreak.Create(This);
       TCode.Create(This, 'e.GetPath: ' + This.GetPath);
       TBreak.Create(This);
       TCode.Create(This, 'Context.GetRelativePath: ' + AContext.GetRelativePath(This));
       TBreak.Create(This);
       TBreak.Create(This);
-      TCode.Create(This, 'Context.GetHomePath: ' + AContext.GetHomePath);
+      TCode.Create(This, 'Context.GetDefaultPath: ' + AContext.GetDefaultPath);
       TBreak.Create(This);
       TCode.Create(This, 'Context.GetPath(e): ' + AContext.GetPath(This));
       TBreak.Create(This);
@@ -796,18 +794,13 @@ begin
     with aPanel do    
     begin
       Route := 'panel2'; 
-      OnRespond := procedure (const AContext: TmnwContext; AResponse: TmnwResponse)
+      OnRespond := procedure (const AContext: TmnwContext)
       begin
-        AResponse.RespondText('Hello World'+#13 + AContext.Route);
+        AContext.Response.RespondText('Hello World'+#13 + AContext.CurrentPath);
       end;
     end;
   end;
     
-end;
-
-class function TInfoSchema.GetCapabilities: TmnwSchemaCapabilities;
-begin
-  Result := (inherited GetCapabilities) + [schemaDynamic];
 end;
 
 { TFilesSchema }
@@ -821,12 +814,12 @@ procedure TFilesSchema.DoCompose(const AContext: TmnwContext);
 begin
   inherited;
   ServeFiles := [serveEnabled, serveSmart, serveDefault, serveIndex];
-  HomeFolder := IncludePathDelimiter(Web.HomeFolder) + 'files';
+  PublicPath := IncludePathDelimiter(Web.PublicPath) + 'files';
   with TFolder.Create(This) do
   begin
     ServeFiles := [serveEnabled, serveSmart, serveDefault, serveIndex];
-    Route := 'folder';
-    HomeFolder := ExpandFileName(Web.HomeFolder+ 'smilies');
+    Route := 'Dir';
+    PublicPath := ExpandFileName(Web.PublicPath+ 'smilies');
   end;
 end;
 
@@ -840,7 +833,7 @@ begin
   with TFile.Create(This) do
   begin
     Route := 'echo';
-    FileName := IncludePathDelimiter(Web.HomeFolder) + 'ws.html';
+    FileName := IncludePathDelimiter(Web.PublicPath) + 'ws.html';
   end;
 end;
 
@@ -849,9 +842,10 @@ end;
 procedure THomeModule.InitItems;
 begin
   inherited;
-  Web.RegisterSchema('', TWelcomeSchema);
+  Web.RegisterSchema('', THomeSchema);
   Web.RegisterSchema('login', TLoginSchema);
-  Web.RegisterSchema('demo', TDemoSchema);
+  Web.RegisterSchema('demo1', TDemo1Schema);
+  Web.RegisterSchema('demo2', TDemo2Schema);
   Web.RegisterSchema('info', TInfoSchema);
   Web.RegisterSchema('files', TFilesSchema);
   Web.RegisterSchema('ws', TWSShema);
@@ -864,7 +858,30 @@ begin
   with Web.Assets do
   begin
     //Web.OnlineFiles:= olfSmart;
-    LogoFile := HomeFolder + 'logo.png';
+    LogoFile := PublicPath + 'logo.png';
+  end;
+end;
+
+{ THomeSchema }
+
+procedure THomeSchema.DoCompose(const AContext: TmnwContext);
+begin
+  inherited;
+  with Document.Body.Main do
+  begin
+    with TCard.Create(This) do
+    begin
+      TLink.Create(This, AContext.GetHomeURL + '/login', 'login');
+      TLink.Create(This, AContext.GetHomeURL + '/info', 'info');
+      TLink.Create(This, AContext.GetHomeURL + '/demo1', 'demo1');
+      TLink.Create(This, AContext.GetHomeURL + '/demo2', 'demo2');
+      TLink.Create(This, AContext.GetHomeURL + '/files', 'files');
+      TLink.Create(This, AContext.GetHomeURL + '/info/sub1', 'test params info/sub1');
+      TLink.Create(This, AContext.GetHomeURL + '/info/sub2/', 'test params info/sub2/');
+      TLink.Create(This, AContext.GetHomeURL + '/info/sub1/sub2/', 'test params info/sub1/sub2');
+      TLink.Create(This, AContext.GetHomeURL + '/files/sub1', 'test redirect files/sub1');
+      TLink.Create(This, AContext.GetHomeURL + '/files/sub1/sub2', 'test redirect files/sub1/sub2');
+    end;
   end;
 end;
 

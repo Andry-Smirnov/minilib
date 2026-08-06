@@ -19,31 +19,21 @@
  *}
 
 {
-   Protocol UserInfo       Host      Port
-    ┌─┴─┐   ┌──┴───┐ ┌──────┴────────┬┴┐
-GET https://john.doe@www.example.com:123/forum/username/questions/q/10/?tag=networking&order=newest#top
-└┬┘                  └──────┬──────┘    └───────────────┬─────────────┘└────────────┬─────────────┘└─┬─┘
-Method                  DomainName                    Path                        Query           Fragment
-                                        └──┬──┘└───┬───┘└───┬────┴──┬─┘           └─┬─┘
-WebElement:                             Module  Namespace Schema  Directory       Params
-    └────────────┬──────────────────────┘ ─ ─ ┘        |         |    |
-    |          HostURL (From Request or Config)        |         |    |
-    └────────────────────────┬─────────────────────────┘         |    |
-    |             HomeURL/URL (WebApp)                           |    |
-    └────────────────────────┬───────────────────────────────────┘    |
-    |                       URL         |                             |
-    └────────────────────────┬────────────────────────────────────────┘
-                             ?          |               |        |    |
-                                        |               |        |    |
-                                        └──────────┬────┘        |    |
-                                        |       ModulePath       |    |
-                                        └──────────┬─────────────┘    |                                        
-                                        |         Path                |  
-                                        └──────────┬──────────────────┘
-                                                   ?     
-{
+   Protocol UserInfo       Host                Path
+    ┌─┴─┐   ┌──┴───┐ ┌──────┴──────────┐┌───────┴─────────────────────┐
+GET https://john.doe@www.example.com:123/forum/user/ask/questions/q/10/?tag=networking&order=newest#top
+└┬┘                  └──────┬──────┴─┬─┘└───────────────┬─────────────┘└────────────┬─────────────┘└─┬─┘
+Method                    Domain    Port└──┬──────┘└┬──┘└───┬────┴──┬─┘           Query           Fragment
+                                         BasePath Module   Schema  CurrentPath    └─┬─┘
+WebElement:                              NameSpace                                Params
+    └────────────┬──────────────────────┘ ─ ─ ┘        |              |     
+    |          HostURL (From Request or Config)        |              |     
+    └────────────────────────┬─────────────────────────┘              |
+    |             HomeURL/URL (WebApp)                                |      
+    └────────────────────────┬────────────────────────────────────────┘     
+                            URL                                      
 
-    Application
+## Application ##
     
                     Document
 ┌──────────────────────┴───────────────────────┐
@@ -52,7 +42,7 @@ WebElement:                             Module  Namespace Schema  Directory     
 ├──────┴───────────────────────────────────────┤  ─┤
 │ MenuBar                                      │   │
 ├────────────┬─────────────────────────────────┤   │
-│ Sidebar    │ Main                            │   │
+│  Sidebar   │ Main                            │   │
 │    ─┬─     │                                 │   ├─ Container
 │ Accordion  │ ┌─ TabControl ──────┐ ┌───────┐ │   │
 │            │ │ Tab │ Tab │       │ │ Card  │ │   │
@@ -94,7 +84,11 @@ WebElement:                             Module  Namespace Schema  Directory     
 }
 
 {.$define LOG}
-{$define MINILIB}
+{$ifopt D+}
+{$define LOCAL_RESOURCE}
+{$endif}
+
+{.$define Warn}
 
 interface
 
@@ -108,8 +102,8 @@ uses
   mnMultipartData, mnModules, mnWebModules;
 
 const
-  cVersion = '1.82';  
-  
+  cVersion = '1.84';
+
 {.$define rtti_objects}
 
 type
@@ -169,7 +163,8 @@ type
 
   TmnwAttribute = class(TmnNameValueObject)
   public
-    function CreateSubValues(vSeparators: TSysCharSet = [' ']): TStringList;
+    IsProperty: Boolean; //that dosnt have value
+    function CreateSubValues(vSeparators: TSysCharSet = [' ']): TStringList;    
   end;
 
   { TmnwAttributes }
@@ -184,6 +179,7 @@ type
     function HaveSubValue(const AName, AValue: String; vSeparators: TSysCharSet = [' ']): Boolean;
     function SetSubValue(const AName, AValue: String; vSeparators: TSysCharSet = [' ']): Boolean;
     function UnsetSubValue(const AName, AValue: String; vSeparators: TSysCharSet = [' ']): Boolean;
+    function AddProp(Name: string): TmnwAttribute;
     procedure Append(AAttributes: TmnwAttributes);
   end;
 
@@ -218,6 +214,7 @@ type
   TLocation = record
     Where: TLocationRelative;
     Custom: string;
+    WithQuery: Boolean;
     class operator Explicit(const Source: string): TLocation;
     class operator Implicit(Source : string) : TLocation;
     class operator Implicit(Source : TLocation): string;
@@ -271,18 +268,23 @@ type
     class operator Initialize({$ifdef FPC}var{$else}out{$endif}Dest: TmnwBounding);
     procedure SetTopBottom(Value: Double);
     procedure SetLeftRight(Value: Double);
-	end;
+    end;
 
   { TElementClasses }
 
   TElementClasses = record
     Items: TArray<String>;
-    function Find(const Name: string): Integer;
+    function IndexOf(const Name: string): Integer;
+    function Exists(const Name: string): Boolean;
+    //Add one item
     function Add(const Name: string): Integer;
-    function Remove(const Name: string): Boolean;
-    procedure Append(const S: string); overload;
+    //Add multiple items in on string
+    procedure Append(const S: string; Delimiter: string = ' '); overload;
     procedure Append(A: TElementClasses); overload;
-    function ToString: string;
+    function Remove(const Name: string): Boolean;
+    function ToString(const Initial: string = ''): string; overload;
+    function Value: string; overload;
+
     class operator Add(A: TElementClasses; B: string): TElementClasses;
     class operator Subtract(A: TElementClasses; B: string): TElementClasses;
     class operator Explicit(const Source: string): TElementClasses;
@@ -292,74 +294,131 @@ type
   end;
 
   TmnwWeb = class;
+
+  TmnwSession = class(TObject)
+  private
+    FID: string;
+    FInstance: TObject;
+    FChanged: Boolean;
+    FDomain: string;
+    FPath: string;
+    FAge: Integer;
+    procedure SetID(const Value: string);
+    procedure SetDomain(const Value: string);
+    procedure SetPath(const Value: string);
+    procedure SetAge(const Value: Integer);
+    
+    procedure SetInteralInstance(const Value: TObject);
+  public    
+    constructor Create;
+    procedure Reset;
+    procedure SetInstance(const AInstance: TObject);
+    property ID: string read FID write SetID;
+    property Domain: string read FDomain write SetDomain;
+    property Path: string read FPath write SetPath;
+    property Age: Integer read FAge write SetAge;
+    property Instance: TObject read FInstance write SetInteralInstance;
+    property Changed: Boolean read FChanged;
+  end;  
   
   { TmnwScope }
-
-  TmnwScope = record
+ 
+  TmnwScope = record  
+  public
     Element: TmnwElement;
     Attributes: TmnwAttributes;
     Classes: TElementClasses;
+    InnerClasses: TElementClasses; //For content classes
     WrapClasses: TElementClasses; //WrapClass is a class used of what parent wrapped it
-    function ToString: string;
-    function GetText: string;
+  public
+    type
+      TSelect = set of (ssAttributes, ssOuter, ssInner);
+    function ToString(Select: TSelect = [ssAttributes, ssOuter, ssInner]; WithSpace: Boolean = False): string; overload;
+    function ToString(WithSpace: Boolean): string; overload;
     
     constructor Create(AElement: TmnwElement);
     procedure Free;
   end;
 
+  TmnwLibraryClass = class of TmnwLibrary;
+  
   TmnwContext = record
+  private
+    FResponse: TmnwResponse;
+    FWeb: TmnwWeb;
+    FRenderer: TmnwRenderer;
+    FWriter: TmnTidyWriter;
+    function GetDomain: string;
+    function GetPort: string;
+    function GetSession: TmnwSession;
+    function GetRequest: TwebRequest;
+  public
     Sender: TObject;
-    Web: TmnwWeb;
-    Request: TmodRequest;
 
     Schema: TmnwSchema;    
     Element: TmnwElement;
     
-    Renderer: TmnwRenderer;
     ParentRenderer: TmnwElementRenderer;
-
-    Writer: TmnTidyWriter;
     //
-    Data: TDON_Element;
+    Data: TDON_Value;
     // For
-    Route: string;   
-    SessionID: String;
-    Session: TObject;
+    CurrentPath: string;   
+
+    Language: string;
+    Direction: TDirection;    
+
+    property Domain: string read GetDomain;
+    //Need to review
+    property Port: string read GetPort;
 
     // http://host:80/
     function GetHostURL: string; overload;
-    // /module/namespace
-    function GetHomePath: string; overload;
-    // http://host:80/module/namespace/
+    // /basepath/module/
+    function GetBasePath: string; overload;
+    // http://host:80/basepath/module/
     function GetHomeURL: string; overload;
+    // http://host:80/basepath/module/schema
+    function GetSchemaURL: string; overload;
 
     // With Schema
-    // /module/namespace/schema
+    // /basepath/module/schema
     function GetPath: string; overload;
-    // /module/namespace/schema/element    
+    // /module/basepath/schema/element    
     function GetPath(e: TmnwElement): string; overload;    
 
-    //this get absolute path http://host:80/module/namespace/schema/element
+    //this get absolute path http://host:80/module/basepath/schema/element
     function GetURL(e: TmnwElement): string; overload;
-    //this get absolute path http://host:80/module/namespace/schema
+    //this get absolute path http://host:80/module/basepath/schema
     function GetURL: string; overload;
 
     //this get path relative requested path /element1/element2
     function GetRelativePath(e: TmnwElement): string; overload;    
 
-    // http://host:80/default_schema/namespace/
+    // http://host:80/default_schema/basepath/
     function GetDefaultPath: string; overload;    
-    //Schema URL with http://host:80/assets/namespace/schema
+    //Schema URL with http://host:80/basepath/assets/schema
     function GetAssetsPath: string;
     function GetAssetsURL: string;
-    //Folder of HomeFolder of assets
-    function GetAssetFolder: string;
-    function GetLocationPath(Location: TLocation): string;
+    //Dir of PublicPath of assets
+    function GetAssetDir: string;
+    function GetLocationPath(AElement: TmnwElement; Location: TLocation): string; overload;
+    
+    property Request: TwebRequest read GetRequest;
+    property Response: TmnwResponse read FResponse;
+    property Session: TmnwSession read GetSession;
+    property Web: TmnwWeb read FWeb;
+    property Renderer: TmnwRenderer read FRenderer;
+    property Writer: TmnTidyWriter read FWriter;
+  public
+    procedure Require(ALibraryClass: TmnwLibraryClass; Priority: Integer = 0);
   end;
 
   TmnwObject = class(TmnNamedObject);
 
-  TLibraryOption = (libDefer, libCross);
+  TLibraryOption = (
+    libDefer, 
+    libCross
+  );
   
   TLibraryOptions = set of TLibraryOption;
 
@@ -374,29 +433,32 @@ type
     stResource
   );
   
-  TLibrarySource = class(TmnNamedObject)
+  TmnwLibrarySource = class(TmnNamedObject)
   public    
     SourceType: TLibrarySourceType;
     Where: TLibrarySourceWhere;
-    Value: string;
-    LocalFileName: string;    
+    OnlineFile: string;
+    LocalFile: string;    
+    Text: string; //For Embed
     Integrity: string;
     Direction: TDirection;
+    Language: string;
     Options: TLibraryOptions;    
     constructor Create; virtual;
   end;
 
-  TLibrarySources = class(TmnNamedObjectList<TLibrarySource>)
+  TLibrarySources = class(TmnNamedObjectList<TmnwLibrarySource>)
   private
   public
     //LocalFile: from assets, only file name, not with path
     //OnlineFile: if OnlineFile ended with / LocalFile will added
-    function Add(SourceType: TLibrarySourceType; Where: TLibrarySourceWhere; const OnlineFile, LocalFileName: string; Direction: TDirection; Integrity: string = ''; Options: TLibraryOptions = [libDefer, libCross]): TLibrarySource; overload;
+    function Add(SourceType: TLibrarySourceType; Where: TLibrarySourceWhere; const OnlineFile, LocalFile: string; Integrity: string = ''; Options: TLibraryOptions = [libDefer, libCross]): TmnwLibrarySource; overload;
+    function AddEmbed(const SourceType: TLibrarySourceType; const AName: string; const EmbedText: string): TmnwLibrarySource; overload;
 
-    function Add(SourceType: TLibrarySourceType; const OnlineFile, LocalFileName: string; Direction: TDirection = dirUndefined): TLibrarySource; overload;
-    function Add(SourceType: TLibrarySourceType; const OnlineFile, LocalFileName: string; Integrity: string; Options: TLibraryOptions = [libDefer, libCross]): TLibrarySource; overload;
+    function Add(SourceType: TLibrarySourceType; const OnlineFile, LocalFile: string; Direction: TDirection = dirUndefined): TmnwLibrarySource; overload;
+    function Add(SourceType: TLibrarySourceType; const OnlineFile, LocalFile: string; Integrity: string; Options: TLibraryOptions = [libDefer, libCross]): TmnwLibrarySource; overload;
 
-    function AddStyle(const EmbedText: string; Direction: TDirection = dirUndefined): TLibrarySource; overload;
+    function AddStyle(const EmbedText: string; AName: string; Direction: TDirection = dirUndefined): TmnwLibrarySource; overload;
   end;
   
   TmnwLibrary = class abstract(TmnNamedObject)
@@ -418,30 +480,28 @@ type
     property Sources: TLibrarySources read FSources;
   end;
 
-  TmnwLibraryClass = class of TmnwLibrary;
-
   { TmnwLibraries }
 
   TmnwLibraries = class(TmnNamedObjectList<TmnwLibrary>)
   private
-    FLock: TCriticalSection;
+    FLock: TMREWSync;
   public
     constructor Create; virtual;
     destructor Destroy; override;     
     function Find(ALibraryName: string): TmnwLibrary; overload;
     function Find(ALibraryClass: TmnwLibraryClass): TmnwLibrary; overload;
     function RegisterLibrary(ALibraryClass: TmnwLibraryClass; Priority: Integer = 0): TmnwLibrary; overload;
-    property Lock: TCriticalSection read FLock;
+    property Lock: TMREWSync read FLock;
   end;
 
-  TmnwUsedLibraries = class(TmnNamedObjectList<TmnwLibrary>)
+  TmnwRequires = class(TmnNamedObjectList<TmnwLibrary>)
   protected
     function Compare(Item1, Item2: TmnwLibrary): Integer; override;
   public    
     function Find(ALibraryClass: TmnwLibraryClass): TmnwLibrary; overload;
 
-    procedure Use(ALibraryClass: TmnwLibraryClass; Priority: Integer = 0); overload;
-    procedure Use(ALibraryName: string); overload;    
+    procedure Use(ALibraryClass: TmnwLibraryClass); overload;
+    procedure Use(ALibraryName: string); overload;
   end;
 
   TJQuery_Library = class(TmnwLibrary)
@@ -454,9 +514,21 @@ type
 
   TWebElements_Library = class(TmnwLibrary)
   protected
-    procedure Created; override;     
+    procedure Created; override;
   public
   end;
+
+  TDarklyTheme_Library = class(TmnwLibrary)
+  protected
+    procedure Created; override;
+  public
+  end;
+
+{  TCustomTheme_Library = class(TmnwLibrary)
+  protected
+    procedure Created; override;
+  public
+  end;}
 
   TElementExecute = reference to procedure;
 
@@ -480,11 +552,22 @@ type
   TmnwPriority = (priorityNormal, priorityStart, priorityEnd);
 
   TTheme = (themeUndefined, themeLight, themeDark);
-  TmnwShadow = (shadowUndefined, shadowThin, shadowThick, shadowEnd, ShadowBottom);
-  TmnwAlign = (alignDefault, alignStart, alignCenter, alignStreach, alignBaseline, alignEnd);
+  TmnwShadow = (shadowUndefined, shadowHairline, shadowThin, shadowThick, shadowEnd, ShadowBottom);
+
+  TmnwAlign = (alDefault, alFirst, alCenter, alStreach, alLast);
+  TmnwJustify = (jstDefault, jstStart, jstCenter, ralBetween, jstAround, jstEvenly, jstEnd);
+
   TmnwFixed= (fixedDefault, fixedTop, fixedBottom, fixedStart, fixedEnd, stickyTop, stickyBottom, stickyStart, stickyEnd);
 
-  TRespondProc = reference to procedure (const AContext: TmnwContext; AResponse: TmnwResponse);
+  TGap = 0..5;
+
+  TGapHelper = record helper for TGap
+    function ToString: string;
+  end;
+
+  //Keep it as DoRespond form
+  TRespondProc = reference to procedure (const Context: TmnwContext);
+  TRenderProc = reference to procedure(Scope: TmnwScope; const Context: TmnwContext);
 
   { TmnwElement }
 
@@ -512,10 +595,12 @@ type
     FIsRoot: Boolean;
     FTimeStamp: Int64;
     FData: String;
+    FEndRoute: Boolean;
     procedure SetState(const AValue: TmnwElementState);
     function GetRespondIt: Boolean;
     function GetRenderIt: Boolean;
     procedure SetRenderIt(const Value: Boolean);
+    procedure SetOnRespond(const Value: TRespondProc);
   protected    
     function GetRoute: String; virtual;
 
@@ -524,20 +609,20 @@ type
     procedure Check; virtual;
     function FindObject(ObjectClass: TmnwElementClass; AName: string; RaiseException: Boolean = false): TmnwElement;
 
-    procedure ServeFolder(APath: string; Options: TmodServeFiles; const AContext: TmnwContext; AResponse: TmnwResponse);
-    function ServeFile(HomeFolder: string; DefaultDocuments: TStringList; Options: TmodServeFiles; const AContext: TmnwContext; AResponse: TmnwResponse): Boolean; overload;
-    function ServeFile(HomeFolder: string; Options: TmodServeFiles; const AContext: TmnwContext; AResponse: TmnwResponse): Boolean; overload;
+    procedure ServeDir(APath: string; Options: TmodServeFiles; const Context: TmnwContext);
+    function ServeFile(PublicPath: string; DefaultDocuments: TStringList; Options: TmodServeFiles; const Context: TmnwContext): Boolean; overload;
+    function ServeFile(PublicPath: string; Options: TmodServeFiles; const Context: TmnwContext): Boolean; overload;
 
-    procedure DoPrepareRenderer(const AContext: TmnwContext); virtual;   
+    procedure DoRequired(const Context: TmnwContext); virtual;
     procedure DoPrepare; virtual;
     
-    procedure DoCompose(const AContext: TmnwContext); virtual;
+    procedure DoCompose(const Context: TmnwContext); virtual;
     procedure DoComposed; virtual;
 
-    procedure DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse); virtual;
-    procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); virtual;
+    procedure DoRespondHeader(const Context: TmnwContext); virtual;
+    procedure DoRespond(const Context: TmnwContext); virtual;
 
-    procedure PrepareRenderer(const AContext: TmnwContext); 
+    procedure PrepareRenderer(const Context: TmnwContext);
     procedure Prepare; 
 
     procedure DoExecute; virtual;
@@ -581,21 +666,24 @@ type
     //this get path without schema and parent element name, element/element
     function GetPathTo(ToElement: TmnwElement): string; overload;
     //Include Host
+
+    function GetPathClasses: string;
     
     function CreateRenderer(const Context: TmnwContext): TmnwElementRenderer;
-    procedure Compose(const AContext: TmnwContext); virtual;
+    procedure Compose(const Context: TmnwContext); virtual;
     procedure AddState(AState: TmnwElementState);
     procedure RemoveState(AState: TmnwElementState);
 
     procedure Clear; {$ifdef FPC} override; {$else} virtual; {$endif} //* see TmnObjectList
+    function CountComposed: Integer;
 
     function GetContentType(Route: string = ''): string; virtual;
 
-    procedure RespondInit(const AContext: TmnwContext; AResponse: TmnwResponse);
-    procedure Respond(const AContext: TmnwContext; AResponse: TmnwResponse);
+    procedure RespondInit(const Context: TmnwContext);
+    procedure Respond(const Context: TmnwContext);
 
     //* Original Render
-    procedure Render(const Context: TmnwContext; AResponse: TmnwResponse); overload;
+    procedure Render(const Context: TmnwContext); overload;
 
     function CanRender: Boolean; virtual;
 
@@ -612,10 +700,8 @@ type
     property Visible: Boolean read FVisible write FVisible;
     property Enabled: Boolean read FEnabled write FEnabled;
 
-
     property RespondIt: Boolean read GetRespondIt; // false: do not use respond
     property RenderIt: Boolean read GetRenderIt write SetRenderIt;
-
 
     property Attributes: TmnwAttributes read FAttributes;
     property Kind: TmnwElementKinds read FKind write FKind;
@@ -623,10 +709,12 @@ type
     property State: TmnwElementState read FState write SetState;
 
     property OnExecute: TElementExecute read FOnExecute write FOnExecute;
-    property OnRespond: TRespondProc read FOnRespond write FOnRespond;
+    property OnRespond: TRespondProc read FOnRespond write SetOnRespond;
     property Handle: THandle read FHandle;
 
     property TimeStamp: Int64 read FTimeStamp;
+    //* FindRoute stop at this element, NOT TESTED YET
+    property EndRoute: Boolean read FEndRoute write FEndRoute;
   end;
 
   TmnwMessage = class(TObject)
@@ -650,7 +738,8 @@ type
     procedure SendMessage(const Message: string);
   protected
     procedure Loop; virtual;
-    procedure Terminate; virtual;
+    procedure SetTerminated; virtual;
+    procedure Terminate; 
   public
     Schema: TmnwSchema;
     Stream: TmnBufferStream;
@@ -663,7 +752,7 @@ type
 
   TmnwAttachments = class(TmnNamedObjectList<TmnwAttachment>)
   private
-    FLock: TCriticalSection;
+    FLock: TMREWSync;
   protected
     procedure Created; override;
   public
@@ -674,15 +763,15 @@ type
     procedure SendMessage(const AttachmentName: string; const Message: string); overload;
     procedure Add(AAttachment: TmnwAttachment);
     procedure Remove(AAttachment: TmnwAttachment);
-    property Lock: TCriticalSection read FLock;
+    property Lock: TMREWSync read FLock;
   end;
 
   TmnwSchemaCapability = (
-    schemaStartup, //* Create it when registered
+    schemaStatic, //* Not deleted when restart server
+//    schemaDynamic,  //* dynamic, do not add it to the list, not cached, becareful
     schemaSession,
-    schemaAttach, //Allow websocket connections, Interactive also allow websocket
-    schemaPermanent, //* Not deleted when restart server
-    schemaDynamic  //* dynamic, do not add it to the list, not cached, becareful
+    schemaStartup, //* Create it when registered
+    schemaAttach //Allow/Accepts websocket connections, Interactive also allow websocket
   );
 
   TmnwSchemaCapabilities = set of TmnwSchemaCapability;
@@ -693,7 +782,7 @@ type
     scmpNew,
     scmpNormal,
     scmpReleased
-	);
+    );
 
   { TmnwSchema }
 
@@ -702,45 +791,51 @@ type
     FAttached: Boolean;
     FAttachments: TmnwAttachments;
     FDefaultDocuments: TStringList;
-    FLock: TCriticalSection;
     FWeb: TmnwWeb;
     FPhase: TmnwSchemaPhase;
     FNamingLastNumber: THandle;
+    FPublicPath: string;
+
+    FInternalLock: TCriticalSection; //Can be nil
     function GetReleased: Boolean;
     procedure SetDefaultDocuments(AValue: TStringList);
+    procedure SetPublicPath(const Value: string);
   protected
     Usage: Integer;
     procedure UpdateAttached;
     class procedure Registered; virtual;
-    procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
-    procedure DoAccept(var AContext: TmnwContext; var Resume: Boolean); virtual;
+    procedure DoRespond(const Context: TmnwContext); override;
+    procedure DoAccept(var Context: TmnwContext; var Resume: Boolean); virtual;
     procedure DoPrepare; override;
-    procedure DoChildRespond(AElement: TmnwElement; const AContext: TmnwContext; AResponse: TmnwResponse); virtual;
+    procedure DoChildRespond(AElement: TmnwElement; const Context: TmnwContext); virtual;
     procedure AttachedMessage(const s: string); virtual; //from websocket
     procedure InteractiveMessage(const s: string);
     property DefaultDocuments: TStringList read FDefaultDocuments write SetDefaultDocuments;
   public
+    Reference: string; //To find it
     LastAccess: TDateTime;
     IsManual: Boolean;
-    Direction: TDirection;
     RefreshInterval: Integer; //* in seconds, for refresh elements that need auto refresh
-    HomeFolder: string;
     ServeFiles: TmodServeFiles;
-    SessionID: string;
     Interactive: Boolean;
     constructor Create(AWeb: TmnwWeb; AName:string; ARoute: string = ''); reintroduce;
     destructor Destroy; override;
 
     class function GetCapabilities: TmnwSchemaCapabilities; virtual;
+    function GetPublicPath: string; virtual;
     function NewHandle: THandle;
 
-    function GetHomeFolder: string;
+    property PublicPath: string read GetPublicPath write SetPublicPath;
+
+    procedure Enter; //Lock if lock not nil (Static)
+    procedure Leave;
+
     //* Attaching cap
     //function Interactive: Boolean;
 
     procedure Start; virtual;
-    function Accept(var AContext: TmnwContext): Boolean;
-    procedure Compose(const AContext: TmnwContext); override;
+    function Accept(var Context: TmnwContext): Boolean;
+    procedure Compose(const Context: TmnwContext); override;
 
     // Executed from a thread of connection of WebSocket, it stay inside until the disconnect or terminate
     procedure Attach(Route: string; Sender: TObject; AStream: TmnBufferStream); // in connection thread
@@ -749,7 +844,6 @@ type
     property Attached: Boolean read FAttached;
     property Released: Boolean read GetReleased;
     property Phase: TmnwSchemaPhase read FPhase;
-    property Lock: TCriticalSection read FLock;
     property Web: TmnwWeb read FWeb;
   public
     type
@@ -781,7 +875,7 @@ type
     [TID_Extension]
     TFile = class(TmnwElement)
     protected
-      procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+      procedure DoRespond(const Context: TmnwContext); override;
     public
       FileName: string;
       Options: TFileOptions;
@@ -797,7 +891,7 @@ type
       ContentType: string;
       FData: TMemoryStream;
     protected
-      procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+      procedure DoRespond(const Context: TmnwContext); override;
     protected
       procedure Created; override;
     public
@@ -825,7 +919,8 @@ type
     //* Keep `var`
     procedure DoCollectAttributes(var Scope: TmnwScope; Context: TmnwContext); virtual;
 
-    procedure RenderChilds(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse);
+    function CanRenderChilds: Boolean; virtual;
+    procedure RenderChilds(Scope: TmnwScope; Context: TmnwContext);
 
     //This function called one time
     procedure AddHead(const Scope: TmnwScope; const Context: TmnwContext); virtual;
@@ -841,13 +936,13 @@ type
 
     //* Content render
     procedure DoEnterRender(Scope: TmnwScope; const Context: TmnwContext); virtual;
-    procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse); virtual;
+    procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext); virtual;
     procedure DoLeaveRender(Scope: TmnwScope; const Context: TmnwContext); virtual;
 
     property Renderer: TmnwRenderer read FRenderer;
     property RendererRegister: TmnwElementRendererRegister read FRendererRegister;
   public
-    procedure Render(AElement: TmnwElement; const Context: TmnwContext; AResponse: TmnwResponse);
+    procedure Render(AElement: TmnwElement; const Context: TmnwContext);
     constructor Create(ARenderer: TmnwRenderer; ARendererRegister: TmnwElementRendererRegister); virtual; //useful for creating it by RendererClass.Create
     procedure CollectAttributes(var Scope: TmnwScope; Context: TmnwContext);
   end;
@@ -859,7 +954,7 @@ type
   TmnwRenderer = class abstract(TmnwObject)
   private
     FModule: TmodWebModule;
-    FLibraries: TmnwUsedLibraries;
+    FRequires: TmnwRequires;
     FParams: TmnwAttributes;
   protected
     {$ifdef rtti_objects}
@@ -874,7 +969,7 @@ type
     destructor Destroy; override;
 
     class function ElementRenderers: TmnwElementRenderers; virtual; abstract; 
-    class function RegisterRenderer(AElementClass: TmnwElementClass; ARendererClass: TmnwElementRendererClass; Replace: Boolean = False): TmnwElementRendererRegister; 
+    class function RegisterRenderer(AElementClass: TmnwElementClass; ARendererClass: TmnwElementRendererClass; Replace: Boolean = False): TmnwElementRendererRegister;
 
     class procedure RegisterElements; virtual;
     
@@ -885,9 +980,10 @@ type
     function CreateRenderer(AObject: TmnwElement): TmnwElementRenderer; overload;
 
     property Params: TmnwAttributes read FParams;
-    property Libraries: TmnwUsedLibraries read FLibraries;
+    property Requires: TmnwRequires read FRequires;
     property Module: TmodWebModule read FModule;
 
+    procedure Require(ALibraryClass: TmnwLibraryClass); overload;
     procedure AddHead(const Context: TmnwContext); virtual; 
   public
     RendererID: Integer;
@@ -912,48 +1008,62 @@ type
 
       THTMLElement = class abstract(TmnwElementRenderer)
       protected         
-        procedure DoEnterRender(Scope: TmnwScope; const Context: TmnwContext); override;
         procedure DoCollectAttributes(var Scope: TmnwScope; Context: TmnwContext); override;
+        procedure DoEnterRender(Scope: TmnwScope; const Context: TmnwContext); override;
       end;
     
       { TComment }
 
       TComment = class(THTMLElement)
       protected
-        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext); override;
+      end;   
+
+      { TJSScript }
+
+      TJSScript = class(THTMLElement)
+      protected
+        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext); override;
       end;
-    
+
       { TFile }
 
       TFile = class(THTMLElement)
       protected
-        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext); override;
       end;
 
       { TJSFile }
 
       TJSFile = class(TFile)
       protected
-        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext); override;
       end;
 
       { TCSSFile }
 
       TCSSFile = class(TFile)
       protected
-        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext); override;
       end;
-    
-      { TDynamicCompose }
 
-      TDynamicCompose = class(THTMLElement)
+      //* Write at render time
+      TOutput = class(THTMLElement)
       protected
-        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext); override;
+      end;
+
+      { TCompose }
+
+      //* Dynamic compose at render time with fake parent
+      TCompose = class(THTMLElement)
+      protected
+        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext); override;
       end;
 
       { TIntervalCompose }
 
-      TIntervalCompose = class(TDynamicCompose)
+      TIntervalCompose = class(TCompose)
       protected
         procedure DoCollectAttributes(var Scope: TmnwScope; Context: TmnwContext); override;
       end;
@@ -963,7 +1073,7 @@ type
       TDocument = class(THTMLElement)
       protected
         procedure DoCollectAttributes(var Scope: TmnwScope; Context: TmnwContext); override;
-        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext); override;
       end;
 
       { TBody }
@@ -971,7 +1081,7 @@ type
       TBody = class(THTMLElement)
       protected
         procedure DoCollectAttributes(var Scope: TmnwScope; Context: TmnwContext); override;
-        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse); override;        
+        procedure DoInnerRender(Scope: TmnwScope; Context: TmnwContext); override;        
         procedure DoLeaveRender(Scope: TmnwScope; const Context: TmnwContext); override;        
       end;
     
@@ -987,19 +1097,6 @@ type
   end;
 
   TRegisteredSchemas = class(TmnNamedObjectList<TmnwRegisterdSchema>)
-  end;
-
-  { TmnwSchemaObject }
-
-  TmnwSchemaObject = class(TmnwRegisterdSchema)
-  private
-    FLock: TCriticalSection;
-  public
-    Schema: TmnwSchema;
-    ManualSchema: Boolean; //Schema set from outside not by request
-    constructor Create;
-    destructor Destroy; override;
-    property Lock: TCriticalSection read FLock;
   end;
 
   TAssetsSchema = class;
@@ -1021,13 +1118,13 @@ type
   TmnwWeb = class(TmnObjectList<TmnwSchema>)
   private
     FOptions: TmnwAppOptions;
-    FHomeFolder: string;
-    FAppFolder: string;
-    FWorkFolder: string;
+    FPublicPath: string;
+    FAppPath: string;
+    FPrivatePath: string;
     FAssets: TAssetsSchema;
     FDefaultSchema: TmnwRegisterdSchema;
     FShutdown: Boolean;
-    FLock: TCriticalSection;
+    FLock: TMREWSync;
     FRegistered: TRegisteredSchemas;
     FTimeStamp: Int64;
     FOnlineFiles: TOnlineFiles;
@@ -1038,7 +1135,7 @@ type
   protected
     procedure SchemaCreated(Schema: TmnwSchema); virtual;
     procedure Created; override;
-    procedure ClearSchemas;
+    procedure CleanSchemas;
   public
     Started: Boolean;
 
@@ -1049,7 +1146,12 @@ type
     ModuleName: string; //Module Name
 
     CompactMode: Boolean;
-    DefaultAge: Integer;
+    SessionAge: Integer; //* in ms
+    PasswordToken: string;
+
+    //SchameName if root path requested without schema = ''
+    FallbackTo: string;
+    JWTmode: Boolean;
 
     constructor Create;
     destructor Destroy; override;
@@ -1065,23 +1167,21 @@ type
     function CreateSchema(SchemaItem: TmnwRegisterdSchema): TmnwSchema; overload;
     function ReleaseSchema(const aSchemaName: string; aSessionID: string): TmnwSchema;
     
-    function InquireElement(var AContext: TmnwContext; FindNested: Boolean): Boolean;    
+    function InquireElement(var Context: TmnwContext; FindNested: Boolean): Boolean;
     //for HTML
-    procedure Respond(var AContext: TmnwContext; AResponse: TmnwResponse);
+    procedure Respond(var Context: TmnwContext);
     //for WebSocket
-    function Attach(var AContext: TmnwContext; Sender: TObject; AStream: TmnBufferStream): TmnwAttachment;
+    function Attach(var Context: TmnwContext; Sender: TObject; AStream: TmnBufferStream): TmnwAttachment;
 
-    function GetHostURL: string; virtual;    
-
-    property Lock: TCriticalSection read FLock;
+    property Lock: TMREWSync read FLock;
     property Assets: TAssetsSchema read FAssets;
     property DefaultSchema: TmnwRegisterdSchema read FDefaultSchema;
     //Public Web Files
-    property HomeFolder: string read FHomeFolder write FHomeFolder;
+    property PublicPath: string read FPublicPath write FPublicPath;
     //Private Files
-    property WorkFolder: string read FWorkFolder write FWorkFolder;
-    //Exe path
-    property AppFolder: string read FAppFolder write FAppFolder;
+    property PrivatePath: string read FPrivatePath write FPrivatePath;
+    //Exe path //TODO do really need it?
+    property AppPath: string read FAppPath write FAppPath;
     property Shutdown: Boolean read FShutdown;
     property Options: TmnwAppOptions read FOptions write FOptions;
     property OnlineFiles: TOnlineFiles read FOnlineFiles write FOnlineFiles;
@@ -1092,14 +1192,15 @@ type
   end;
 
   TSize = (
-		szUndefined,
-    
-	 	szVerySmall,
-		szSmall,
-		szNormal,
-		szLarge,
-		szVeryLarge
-	);
+        szUndefined,    
+        szVeryVerySmall,
+        szVerySmall,
+        szSmall,
+        szMedium,
+        szLarge,
+        szVeryLarge,
+        szVeryVeryLarge
+    );
 
 {-------------------------------------------------------}
 {-----------------    STANDARD    ----------------------}
@@ -1137,21 +1238,21 @@ type
         Comment: string;
       end;
 
-      THTMLContainer = class abstract(THTMLElement)
+      { TJSScript }
+      
+      TJSScript = class(THTMLElement)
       public
-        Medium: Boolean; //Medium or above
-        AlignItems: TmnwAlign;
-        JustifyItems: TmnwAlign;
-        Padding: TmnwBounding; 
+        Script: string;
+        constructor Create(AParent: TmnwElement; AScript: string); reintroduce;
       end;
       
-      THTMLLayout = class abstract(THTMLContainer)
+      THTMLLayout = class abstract(THTMLElement)
       public
+        Medium: Boolean; //Medium or above
         Fixed: TmnwFixed;
         Solitary: Boolean; //* Single in Row
-        Align: TmnwAlign;
-
-        Margin: TmnwBounding; 
+        //Padding: TmnwBounding; 
+        //Margin: TmnwBounding; 
       end;
 
       { THTMLComponent }
@@ -1171,9 +1272,23 @@ type
         procedure Created; override;
       public
         Size: TSize; //Max Width
+        MinSize: TSize; //Max Width
         Shadow: TmnwShadow;
         Hint: string;
         ControlStyle: TItemStyle;
+      end;
+
+      TmnwLabelLayout = (lfUndefined, lfSide, lfTop, lfFloating);
+
+      THTMLFormControl = class abstract(THTMLControl)
+      private
+        FCaption: string;
+        procedure SetCaption(const AValue: string);
+      public
+        //* Layout of the caption label: clTop (above input) or clSide (left of input)
+        LabelLayout: TmnwLabelLayout;        
+        Required: Boolean;
+        property Caption: string read FCaption write SetCaption;        
       end;
 
       { TJSFile }
@@ -1194,27 +1309,37 @@ type
 
       TAssets = class(THTMLElement)
       protected
-        procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoRespond(const Context: TmnwContext); override;
       public
-        HomeFolder: string;
+        PublicPath: string;
         ServeFiles: TmodServeFiles;
         function GetContentType(Route: string): string; override;
       end;
 
       TFolder = class(THTMLElement)
       protected
-        procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoRespond(const Context: TmnwContext); override;
       public
-        HomeFolder: string;
+        PublicPath: string;
         ServeFiles: TmodServeFiles;
         function GetContentType(Route: string): string; override;
       end;
 
-      TComposeProc = reference to procedure(Inner: TmnwElement; AResponse: TmnwResponse);
+      { TOutput }
 
-      { TDynamicCompose }
+      //* Write at render time
+      TOutput = class(THTMLElement)
+      protected
+      public
+        OnOutput: TRenderProc;
+        constructor Create(AParent: TmnwElement; AOnOutput: TRenderProc = nil); reintroduce;
+      end;
 
-      TDynamicCompose = class(THTMLElement)
+      TComposeProc = reference to procedure(Inner: TmnwElement; const Context: TmnwContext);
+
+      { TCompose }
+
+      TCompose = class(THTMLElement)
       protected
         type
 
@@ -1224,9 +1349,9 @@ type
           public
           end;
 
-        procedure InnerCompose(Inner: TmnwElement; AResponse: TmnwResponse); virtual;
+        procedure InnerCompose(Inner: TmnwElement; const Context: TmnwContext); virtual;
 
-        procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoRespond(const Context: TmnwContext); override;
       public
         OnCompose: TComposeProc;
         constructor Create(AParent: TmnwElement; AOnCompose: TComposeProc = nil); reintroduce;
@@ -1234,7 +1359,7 @@ type
 
       [TID_Extension]
       [TRoute_Extension]
-      TIntervalCompose = class(TDynamicCompose)
+      TIntervalCompose = class(TCompose)
       public
         Code: string;
       end;
@@ -1353,21 +1478,29 @@ type
         function CanRender: Boolean; override;
       end;
 
-      TMain = class(THTMLComponent)
+      TMain = class(THTMLLayout)
       protected
         procedure Created; override;
       public
-        Gap: Integer;
+        Gap: TGap;
+      end;
+
+      TBox = class(THTMLLayout)
+      public
+        Gap: TGap;
       end;
 
       TRow = class(THTMLLayout)
       public
-        ContentAlign: TmnwAlign;
+        NoWrap: Boolean;
+        AlignItems: TmnwAlign;
+        JustifyItems: TmnwJustify;
       end;
 
       TColumn = class(THTMLLayout)
       public
         Size: Integer;
+        Reverse: Boolean;
       end;
 
       { TBar }
@@ -1413,31 +1546,57 @@ type
 
       [TID_Extension]
       TAccordionSection = class(THTMLLayout)
+      protected
       public
         Image: TImageLocation;
         Caption: string;
         Expanded: Boolean;
         SaveState: Boolean;
+        function CanRender: Boolean; override;
       end;
 
       TAccordionItem = class(TClickable)
       public
       end;
+      
+      {THTMLContainer = class abstract(THTMLElement)
+      public
+        AlignItems1: TmnwAlign;
+        JustifyItems1: TmnwAlign;
+        Padding: TmnwBounding; 
+      end;}
+      
+      TCardFooter = class(THTMLLayout)      
+      public
+        Fixed: Boolean;
+      end;
 
       { TCard }
 
       [TID_Extension]
-      TCard = class(THTMLItem)
+      TCard = class(THTMLControl)
+      private 
+        FFooter: TCardFooter;
       protected
         procedure Created; override;
       public
+        Caption: string;
         Collapse: Boolean;
+        
+        AlignItems: TmnwAlign;
+        JustifyItems: TmnwJustify;
+        NoWrap: Boolean;
+        Gap: TGap;
+        constructor Create(AParent: TmnwElement; AKind: TmnwElementKinds =[]); override;
+        property Footer: TCardFooter read FFooter;
       end;
 
       { TPanel }
 
       TPanel = class(THTMLItem)
       public
+        Direction: TDirection;
+        Gap: TGap;
       end;
 
       { TLink }
@@ -1452,11 +1611,7 @@ type
       [TID_Extension]
       TCollapseCaption = class(THTMLItem)
       protected
-        procedure DoCompose(const AContext: TmnwContext); override;
-      public
-      end;
-
-      TThemeModeButton = class(THTMLItem)
+        procedure DoCompose(const Context: TmnwContext); override;
       public
       end;
 
@@ -1470,6 +1625,19 @@ type
         Options: TDropdownOptions;
         Caption: string;
         Image: TImageLocation;
+      end;
+
+      { TPopupMenu }
+
+      [TID_Extension]
+      TPopupMenu = class(THTMLControl)
+      protected
+        procedure Created; override;
+      public
+        Items: TStringList;
+        Caption: string;
+        Image: TImageLocation;
+        destructor Destroy; override;
       end;
 
       TDropdownItem = class(TLink)
@@ -1505,22 +1673,24 @@ type
       
       { TForm }
 
-      TFormButton = record
-        Caption: string;
-      end;
-
       [TID_Extension]
-      [TName_Extension]
+      [TRoute_Extension]
       TForm = class(THTMLElement)
       private
       protected
-        procedure DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoRespondHeader(const Context: TmnwContext); override;
         procedure Created; override;
         procedure DoComposed; override;
       public
-        PostTo: TLocation;
+        type
+          TFormButton = record
+            Caption: string;
+          end;
+      public
+        Gap: TGap;
+        Endpoint: TLocation;
         CancelTo: TLocation;
-        SubmitTo: string;
+        CallScript: string;
 
         //RedirectTo: TLocation;
         RedirectTo: string;
@@ -1534,6 +1704,13 @@ type
       public
         Text: string;
         constructor Create(AParent: TmnwElement; AText: string = ''); reintroduce;
+      end;
+
+      THeading = class(THTMLElement)
+      public
+        Size: Integer;
+        Text: string;
+        constructor Create(AParent: TmnwElement; ASize: Integer; AText: string = ''); reintroduce;
       end;
 
       TCode = class(THTMLComponent)
@@ -1556,7 +1733,7 @@ type
       [TRoute_Extension]
       TAction = class(THTMLElement)
       protected
-        procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoRespond(const Context: TmnwContext); override;
       public        
         procedure Loop; virtual;
         constructor Create(AParent: TmnwElement; AName: string; ARoute: string = ''; ActionProc: TRespondProc = nil); reintroduce; overload;
@@ -1568,26 +1745,62 @@ type
         constructor Create(AParent: TmnwElement; const AText: string); reintroduce;
       end;
 
-      { TButton }
+      TSpanButton = class(TSpan)
+      public
+      end;
+      
+      { TCustomButton }
 
-      TButton = class(TClickable)
+      TCustomButton = class(TClickable)
       private
       protected
         procedure Created; override;
       public
-        JSFunction: string;
+        CallScript: string;
+        ConfirmMessage: string;
+        Outline: Boolean;
+        constructor Create(AParent: TmnwElement; const ACaption: string); reintroduce; overload;
       end;
 
-      { TZoomButtons }
+      TButton = class(TCustomButton)
+      end;
 
-      TZoomButtons = class(TGroupButtons)
+      TToolButton = class(TButton)
+      end;
+
+      TThemeButton = class(TToolButton)
       protected
-        FButtonSmall: TButton;
-        FButtonNormal: TButton;
-        FButtonLarge: TButton;
         procedure Created; override;
       public
       end;
+
+      TFormButton = class(TCustomButton)
+      public
+        FormID: string;
+      end;
+      
+      TSubmitForm = class(TFormButton)
+      public
+      end;
+
+      TResetForm = class(TFormButton)
+      public
+      end;
+
+      TActionForm = class(TFormButton)
+      public
+        Action: string;
+      end;
+
+      TCookieButton = class(TCustomButton)
+      public
+        Value: string;
+      end;     
+
+      TCookieButtons = class(TGroupButtons)
+      protected
+      public
+      end;      
 
       TNavItem = class(TClickable)
       private
@@ -1608,14 +1821,12 @@ type
       public
       end;
 
-      { TInput }
+      { TCustomInput }
 
       [TID_Extension]
-      TInput = class(THTMLComponent)
+      TCustomInput = class(THTMLFormControl)
       private
-        FCaption: string;
         FValue: string;
-        procedure SetCaption(const AValue: string);
         procedure SetValue(const AValue: string);
       protected
         procedure Created; override;
@@ -1624,19 +1835,88 @@ type
         PlaceHolder: string;
         HelpText: string;
         EditType: string;
-        Required: Boolean;
       public
         property Value: string read FValue write SetValue;
-        property Caption: string read FCaption write SetCaption;
+      end;
+
+      TInput = class(TCustomInput)      
+      public
+        AutoFocus: Boolean;
+        AutoComplete: Boolean;        
+        constructor Create(AParent: TmnwElement; ACaption: string = ''; AValue: string = ''); reintroduce;      
+      end;
+
+      [TID_Extension]
+      TUsername = class(TInput)
+      protected
+        procedure Created; override;
+      public
       end;
 
       { TInputPassword }
 
       [TID_Extension]
-      TInputPassword = class(TInput)
+      TPassword = class(TInput)
+      protected
+      public
+        Token: string;
+      end;
+
+      TNewPassword = class(TPassword)
+      protected
+      public
+      end;      
+
+      { TIntegerInput }
+
+      [TID_Extension]
+      TIntegerInput = class(TInput)
+      protected
+      public
+      end;
+
+      { TCountInput }
+
+      [TID_Extension]
+      TCountInput = class(TIntegerInput)
       protected
         procedure Created; override;
+      public
+        Min: Integer; //Default 0
+        Max: Integer; //Default 100
       end;
+
+      { TDateInput }
+
+      [TID_Extension]
+      TDateInput = class(TInput)
+      protected
+      public
+      end;
+
+      { TTimeInput }
+
+      [TID_Extension]
+      TTimeInput = class(TInput)
+      protected
+      public
+      end;
+
+      { TDateTimeInput }
+
+      [TID_Extension]
+      TDateTimeInput = class(TInput)
+      protected
+      public
+      end;
+
+      [TName_Extension]
+      THiddenInput = class(THTMLElement)
+      protected
+      public
+        Value: string;
+        constructor Create(AParent: TmnwElement; const AName: string; const AValue: string = ''); reintroduce;
+      end;      
 
       TCustomImage = class(THTMLComponent)
       public
@@ -1647,7 +1927,7 @@ type
       [TID_Extension]
       TImage = class(TCustomImage)
       protected
-        procedure DoCompose(const AContext: TmnwContext); override;
+        procedure DoCompose(const Context: TmnwContext); override;
       public
         Source: TLocation;
       end;
@@ -1661,7 +1941,7 @@ type
         procedure SetFileName(const Value: string);
       protected
         function GetRoute: String; override;
-        procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoRespond(const Context: TmnwContext); override;
       public        
         function CanRender: Boolean; override;
         function GetContentType(Route: string): string; override;
@@ -1675,7 +1955,7 @@ type
       private
         FData: TMemoryStream;
       protected
-        procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
+        procedure DoRespond(const Context: TmnwContext); override;
       protected
         function GetRoute: String; override;
         procedure Created; override;
@@ -1696,6 +1976,11 @@ type
       public
       end;
 
+      THorzLine = class(THTMLElement)
+      private
+      public
+      end;
+      
       //* Custom Tag
       TTag = class(THTMLElement) //TODO
       public
@@ -1744,27 +2029,27 @@ type
   TmnwRenderers = class(TmnNamedObjectList<TmnwRendererRegister>)
   private
     FCurrent: TmnwRendererRegister;
+    FStarted: Boolean;
   public
     function RegisterRenderer(AName: string; ARendererClass: TmnwRendererClass): TmnwRendererRegister; overload;
     function FindBy(ARendererClass: TmnwRendererClass): TmnwRendererRegister; overload;
     procedure Switch(AName: string); overload;
     procedure Switch(ARendererClass: TmnwRendererClass); overload;
     property Current: TmnwRendererRegister read FCurrent;
+    property Started: Boolean read FStarted;
   end;
   
   TmnwResponse = class(TwebResponse)
   private
-    FSession: TmnwCookie;
-    function GetSessionID: string;
-    procedure SetSessionID(const Value: string);    
+    FSession: TmnwSession;
   protected
-    procedure SetAnswer(const Value: TmodAnswer); override;
-    procedure DoWriteCookies; override;
-    procedure Created; override;
-  public
-    destructor Destroy; override;
-    property Session: TmnwCookie read FSession;
-    property SessionID: string read GetSessionID write SetSessionID;
+    procedure DoSetCookies; override;     
+    procedure DoSendHeader; override;     
+    
+  public    
+    constructor Create(ARequest: TmodRequest); override;
+    destructor Destroy; override;     
+    property Session: TmnwSession read FSession;
   end;
 
   { TAssetsSchema }
@@ -1775,37 +2060,45 @@ type
   protected
     //FLogo: THTML.TMemory;  
     procedure Created; override;
-    procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;     
-  public    
+    procedure DoRespond(const Context: TmnwContext); override;
+  public
     class function GetCapabilities: TmnwSchemaCapabilities; override;
     procedure Start; override;
     //property Logo: THTML.TMemory read FLogo;
     property LogoFile: string read FLogoFile write FLogoFile;
+    function GetPublicPath: string; override;
   end;
 
   //Return error as json if fail with message of error, so we need JS to post
   TAuthForm = class(THTML.THTMLItem)
+  private
+    FForm: THTML.TForm;
   protected
-    procedure DoCompose(const AContext: TmnwContext); override;
-  public
-    Form: THTML.TForm;
+    procedure DoCompose(const Context: TmnwContext); override;
+    procedure Created; override;     
+  public      
+    JWTMode: Boolean;
+    property Form: THTML.TForm read FForm;
   end;
 
   TAuthSchema = class(THTML)
   private
+    FAuth: TAuthForm;
+    FLoginCard: THTML.TCard;
   public
-    AuthForm: TAuthForm;
   protected
-    procedure DoLogin(const AContext: TmnwContext; out Success: Boolean; out Message: string; out SessionID: string); virtual;
-    procedure DoLogout(const AContext: TmnwContext; AResponse: TmnwResponse); virtual;   
+    procedure DoLogin(const Context: TmnwContext; var Success: Boolean; var Message: string; var SessionID: string); virtual; //use `var` no `out` because `inherited` reset it
+    procedure DoLogout(const Context: TmnwContext); virtual;
 
-    procedure UserLogin(const AContext: TmnwContext; AResponse: TmnwResponse);     
-    procedure UserLogout(const AContext: TmnwContext; AResponse: TmnwResponse); 
+    procedure UserLogin(const Context: TmnwContext);
+    procedure UserLogout(const Context: TmnwContext);
     
-    procedure DoChildRespond(AElement: TmnwElement; const AContext: TmnwContext; AResponse: TmnwResponse); override;
-    procedure DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse); override;
-    procedure DoCompose(const AContext: TmnwContext); override;
+    procedure DoChildRespond(AElement: TmnwElement; const Context: TmnwContext); override;
+    procedure DoRespondHeader(const Context: TmnwContext); override;
+    procedure DoCompose(const Context: TmnwContext); override;
+    procedure Created; override;     
   public
+    property Auth: TAuthForm read FAuth;
   end;
 
   { TmnwWebCommand }
@@ -1831,7 +2124,7 @@ type
   protected
     function CreateRenderer: TmnwRenderer; virtual;
     procedure InitItems; override;
-    procedure DoPrepareRequest(ARequest: TmodRequest); override;
+    procedure DoMatched(ARequest: TmodRequest); override;
     procedure Start; override;
     procedure Stop; override;
   public
@@ -1841,6 +2134,30 @@ type
     property Web: TmnwWeb read FWeb;
   end;
 
+{ Controls } 
+
+type
+
+  { TZoomButtons }
+
+  TZoomButtons = class(THTML.TGroupButtons)
+  protected
+    FButtonSmall: THTML.TToolButton;
+    FButtonNormal: THTML.TToolButton;
+    FButtonLarge: THTML.TToolButton;
+    procedure Created; override;
+  public
+  end;
+
+  [TRoute_Extension]
+  TLangDropdown = class(THTML.TDropdown)
+  protected
+    procedure Created; override; 
+    procedure DoRespond(const Context: TmnwContext); override;
+    procedure DoCompose(const Context: TmnwContext); override;
+  end;
+
+  
 {$ifdef FPC}
 {$R 'mnWebElements.rc'}
 {$else}
@@ -1852,49 +2169,38 @@ const
   woFullTag = [woOpenIndent, woCloseIndent];
 
 function DirectionToStr(Direction: TDirection): string;
-function GetTimeStamp: Int64;
+function ThemeToStr(Theme: TTheme): string;
 
 //Short functions
 //Single Quote
-function SQ(s: string): string; inline;
+function SQ(const s: string): string; inline;
 //Double Quote
-function DQ(s: string): string; inline;
+function DQ(const s: string): string; inline;
+function Attr(const s: string): string; overload; inline;
+function Attr(Value: Integer): string; overload; inline;
 
 //Name Value with Quote 
 function NV(const Name, Value: string): string; overload; inline;
 function NV(const Name, Value, Default: string): string; overload; inline;
 
 function AddIf(const Value: string; Add: string): string; overload; inline;
-function When(const Value: string; const Default: string = ''): string; overload; inline;
-function When(Condition: Boolean; const Value: string; const Default: string = ''): string; overload; inline;
-function When(Condition: Boolean): string; overload; inline;
 function When(Value: Boolean; Kind: TmnwElementKind): TmnwElementKinds; overload;
+
 function StartURL(const Path: string): string; inline;
 function EndURL(const Path: string): string; inline;
-
-function NewUUID: string;
+function EscapeAttr(const S: string): string;
 
 function Renderers: TmnwRenderers;
-function Libraries: TmnwLibraries; //TODO
-var
-  GlobalTimeStamp: Int64;
+function Libraries: TmnwLibraries;
+
+procedure InitLanguages(const APath: string);
+function _T(const Key: string; const Lang: string; const Default: string = ''): string;
 
 implementation
 
 uses  
-  Generics.Collections;
-
-function GetTimeStamp: Int64;
-var
-  t: Double absolute Result;
-begin
-  t := Now;
-end;
-
-function NewUUID: string;
-begin
-  Result := UUIDToString(TGUID.NewGuid);
-end;
+  Generics.Collections,
+  mnHttpClient;
 
 function DirectionToStr(Direction: TDirection): string;
 begin
@@ -1904,30 +2210,33 @@ begin
     Result := 'ltr';
 end;
 
-function Space(const s: string): string; overload; inline;
+function ThemeToStr(Theme: TTheme): string;
 begin
-  if s <> '' then
-    Result := ' ' + s
-  else
-    Result := s;
+  case Theme of
+  themeUndefined: Result := '';
+  themeLight: Result := 'light';
+  themeDark: Result := 'dark';
+  end;
 end;
 
-function Space(const s1, s2: string): string; overload; inline;
-begin
-  if (s1 <> '') and (s2 <> '') then
-    Result := s1 + ' ' + s2
-  else
-    Result := s1 + s2;
-end;
-
-function SQ(s: string): string; inline;
+function SQ(const s: string): string; inline;
 begin
   Result := QuoteStr(s, '''');
 end;
 
-function DQ(s: string): string; inline;
+function DQ(const s: string): string; inline;
 begin
   Result := QuoteStr(s, '"');
+end;
+
+function Attr(const s: string): string; inline;
+begin
+  Result := DQ(EscapeAttr(s));
+end;
+
+function Attr(Value: Integer): string; inline;
+begin
+  Result := Attr(Value.ToString);
 end;
 
 //return "Name" "Value" if Value not empty
@@ -1957,30 +2266,6 @@ begin
     Result := '';
 end;
 
-function When(const Value: string; const Default: string = ''): string; overload; inline;
-begin
-  if Value = '' then
-    Result := Default
-  else
-    Result := Value;
-end;
-
-function When(Condition: Boolean; const Value: string; const Default: string = ''): string; overload; inline;
-begin
-  if Condition then
-    Result := Value
-  else
-    Result := Default;
-end;
-
-function When(Condition: Boolean): string; overload; inline;
-begin
-  if Condition then
-    Result := 'true'
-  else
-    Result := 'false';
-end;
-
 function When(Value: Boolean; Kind: TmnwElementKind): TmnwElementKinds;
 begin
  if Value then
@@ -1997,6 +2282,13 @@ end;
 function EndURL(const Path: string): string;
 begin
   Result := AddEndURLDelimiter(Path);
+end;
+
+function EscapeAttr(const S: string): string;
+begin
+  Result := StringReplace(S, '&', '&amp;', [rfReplaceAll]);
+  Result := StringReplace(Result, '"', '&quot;', [rfReplaceAll]);
+  Result := StringReplace(Result, '<', '&lt;', [rfReplaceAll]);
 end;
 
 function ExtractClassName(const ClassName: string; ToLower: Boolean = False): string;
@@ -2054,9 +2346,56 @@ function Libraries: TmnwLibraries;
 begin
   if FLibraries = nil then
     FLibraries := TmnwLibraries.Create;
-  Result := FLibraries;  
+  Result := FLibraries;
 end;
-  
+
+var
+  Languages: TDictionary<string, TDON_Value> = nil; //Move to TmnwWeb
+
+procedure InitLanguages(const APath: string);
+var
+  SR: TSearchRec;
+  LangCode: string;
+  LangData: TDON_Value;
+begin
+  if Languages = nil then
+    Languages := TDictionary<string, TDON_Value>.Create
+  else
+    Languages.Clear;
+
+  if FindFirst(APath + '*.json', 0, SR) = 0 then
+  try
+    repeat
+      LangCode := SubStr(SR.Name, '.');
+      LangData := JsonLoadFile(APath + SR.Name, [jsoModern, jsoModernPlus]);
+      if LangData <> nil then
+      begin
+//        Languages.AddOrSetValue(LangCode, LangData);
+        Languages.Add(LangCode, LangData);
+      end;
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+end;
+
+function _T(const Key: string; const Lang: string; const Default: string = ''): string;
+var
+  LangData: TDON_Value;
+begin
+  if Languages = nil then
+    Exit(Default);
+  if Languages.TryGetValue(Lang, LangData) then
+  begin
+    if LangData[Key].IsExists then
+      Result := LangData[Key].AsString
+    else
+      Result := Default;
+  end
+  else
+    Result := Default;
+end;
+
 {$ifdef rtti_objects}
 procedure CacheClasses;
 var
@@ -2143,6 +2482,10 @@ begin
 //  Stream.Close([cloData]);
 end;
 
+procedure TmnwAttachment.SetTerminated;
+begin
+end;
+
 procedure TmnwAttachment.Loop;
 var
   s: string;
@@ -2158,7 +2501,7 @@ var
     else
       eol := '';
     lCmd := SubStr(s, 1, -eol.Length);
-    SpliteStr(lCmd, ' ', lCmd, lValue);
+    SplitStr(lCmd, ' ', lCmd, lValue);
   end;
 
   procedure MessageIt;
@@ -2220,8 +2563,9 @@ end;
 
 procedure TmnwAttachment.Terminate;
 begin
-  FTerminated := True;
   Stream.Close;
+  FTerminated := True;
+  SetTerminated;
 end;
 
 destructor TmnwAttachment.Destroy;
@@ -2239,7 +2583,7 @@ end;
 constructor TmnwAttachments.Create;
 begin
   inherited Create;
-  FLock := TCriticalSection.Create;
+  FLock := TMREWSync.Create;
 //  FMessages := TmnwMessages.Create;
 end;
 
@@ -2257,12 +2601,12 @@ var
 begin
   List := TList<TmnwAttachment>.Create;
   try
-    Lock.Enter;
+    Lock.BeginWrite;
     try
       for Attachment in Self do
         List.Add(Attachment);
     finally
-      Lock.Leave;
+      Lock.EndWrite;
     end;
     for Attachment in List do
       Attachment.Terminate;
@@ -2278,47 +2622,39 @@ end;
 
 procedure TmnwAttachments.Add(AAttachment: TmnwAttachment);
 begin
-  Lock.Enter;
+  Lock.BeginWrite;
   try
     inherited Add(AAttachment);
   finally
-    Lock.Leave;
+    Lock.EndWrite;
   end;
 end;
 
 procedure TmnwAttachments.Remove(AAttachment: TmnwAttachment);
 begin
-  Lock.Enter;
+  if Lock = nil then
+    raise Exception.Create('Lock is nil in Attachments');
+  Lock.BeginWrite;
   try
     inherited Remove(AAttachment);
   finally
-    Lock.Leave;
+    Lock.EndWrite;
   end;
 end;
 
 procedure TmnwAttachments.SendMessage(const AttachmentName, Message: string);
 var
   Attachment: TmnwAttachment;
-  List: TList<TmnwAttachment>;
 begin
-  // Collect matching attachments while locked, then send outside the lock
-  // to avoid blocking other threads on slow network writes.
-  List := TList<TmnwAttachment>.Create;
+  Lock.BeginRead;
   try
-    Lock.Enter;
-    try
-      for Attachment in Self do
-      begin
-        if (Attachment.Name = '') or SameText(AttachmentName, Attachment.Name) then
-          List.Add(Attachment);
-      end;
-    finally
-      Lock.Leave;
+    for Attachment in Self do
+    begin
+      if (Attachment.Name = '') or SameText(AttachmentName, Attachment.Name) then
+        Attachment.SendMessage(Message);
     end;
-    for Attachment in List do
-      Attachment.SendMessage(Message);
   finally
-    List.Free;
+    Lock.EndRead;
   end;
 end;
 
@@ -2382,17 +2718,23 @@ var
   idItem: Integer;
   sb: TStringBuilder;
 begin
-  idItem := IndexOfName('id');
-  if (idItem > 0) then
-    Move(idItem, 0);
-
   sb := TStringBuilder.Create;
   try
+    idItem := IndexOfName('id');
+    if (idItem >= 0) then
+    begin
+      a := Items[idItem];
+      sb.Append(a.Name).Append('=').Append(DQ(a.Value));
+    end;
+
     for a in Self do
     begin
       if sb.Length > 0 then
         sb.Append(' ');
-      sb.Append(a.Name).Append('=').Append(QuoteStr(a.Value, '"'));
+      if a.IsProperty and (a.Value = '') then
+        sb.Append(a.Name)
+      else if not SameText(a.name, 'id') then           
+        sb.Append(a.Name).Append('=').Append(DQ(a.Value));
     end;
     Result := sb.ToString;
   finally
@@ -2428,6 +2770,12 @@ begin
   end;
 end;
 
+function TmnwAttributes.AddProp(Name: string): TmnwAttribute;
+begin
+  Result := Add(Name);
+  Result.IsProperty := True;  
+end;
+
 procedure TmnwAttributes.Append(AAttributes: TmnwAttributes);
 var
   fromAttibute: TmnwAttribute;
@@ -2455,7 +2803,7 @@ end;
 
 { TmnwElementRenderer }
 
-procedure TmnwElementRenderer.RenderChilds(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwElementRenderer.RenderChilds(Scope: TmnwScope; Context: TmnwContext);
 var
   o: TmnwElement;
   ParentRenderer: TmnwElementRenderer;
@@ -2480,11 +2828,11 @@ begin
 
     // Render in priority order
     for o in StartElements do
-      o.Render(Context, AResponse);
+      o.Render(Context);
     for o in NormalElements do
-      o.Render(Context, AResponse);
+      o.Render(Context);
     for o in EndElements do
-      o.Render(Context, AResponse);
+      o.Render(Context);
   finally
     EndElements.Free;
     NormalElements.Free;
@@ -2501,9 +2849,10 @@ procedure TmnwElementRenderer.DoEnterRender(Scope: TmnwScope; const Context: Tmn
 begin
 end;
 
-procedure TmnwElementRenderer.DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwElementRenderer.DoInnerRender(Scope: TmnwScope; Context: TmnwContext);
 begin
-  RenderChilds(Scope, Context, AResponse);
+  if CanRenderChilds then
+    RenderChilds(Scope, Context);
 end;
 
 procedure TmnwElementRenderer.DoLeaveRender(Scope: TmnwScope; const Context: TmnwContext);
@@ -2526,7 +2875,7 @@ procedure TmnwElementRenderer.DoCollectAttributes(var Scope: TmnwScope; Context:
 begin
 end;
 
-procedure TmnwElementRenderer.Render(AElement: TmnwElement; const Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwElementRenderer.Render(AElement: TmnwElement; const Context: TmnwContext);
 var
   aScope: TmnwScope;
 begin
@@ -2538,7 +2887,7 @@ begin
       Context.ParentRenderer.DoEnterChildRender(aScope, Context);
 
     DoEnterRender(aScope, Context);
-    DoInnerRender(aScope, Context, AResponse);
+    DoInnerRender(aScope, Context);
     DoLeaveRender(aScope, Context);
 
     if Context.ParentRenderer <> nil then
@@ -2558,6 +2907,11 @@ end;
 
 procedure TmnwElementRenderer.AddHead(const Scope: TmnwScope; const Context: TmnwContext);
 begin
+end;
+
+function TmnwElementRenderer.CanRenderChilds: Boolean;
+begin
+  Result := True;
 end;
 
 procedure TmnwElementRenderer.CollectAttributes(var Scope: TmnwScope; Context: TmnwContext);
@@ -2587,17 +2941,17 @@ begin
     StrToStrings(Value, Result, vSeparators, []);
 end;
 
-procedure TmnwElement.Render(const Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwElement.Render(const Context: TmnwContext);
 var
   er: TmnwElementRenderer;
 begin
   if CanRender then
-  begin    
+  begin
     er := CreateRenderer(Context);
     if er <> nil then
     try
       try
-        er.Render(Self, Context, AResponse);
+        er.Render(Self, Context);
       except
         on E: Exception do
           raise Exception.Create('Error in '+ ClassName +': ' + E.Message);
@@ -2608,14 +2962,14 @@ begin
   end;
 end;
 
-procedure TmnwElement.PrepareRenderer(const AContext: TmnwContext);
+procedure TmnwElement.PrepareRenderer(const Context: TmnwContext);
 var
   o: TmnwElement;
 begin
-  DoPrepareRenderer(AContext);
+  DoRequired(Context);
   for o in Self do
   begin
-    o.PrepareRenderer(AContext); 
+    o.PrepareRenderer(Context);
   end;
 end;
 
@@ -2646,6 +3000,9 @@ function TmnwElementRenderers.RegisterRenderer(AElementClass: TmnwElementClass; 
     rttiCollectExtensions(Result.ElementClass, Result.Extensions);
   end;
 begin
+  if Renderers.Started then
+    raise Exception.Create('Once web app started you can''t register Renderer');
+
   if not AElementClass.InheritsFrom(TmnwElement) then
     raise Exception.Create('Element should inherited from THTML');
       
@@ -2682,7 +3039,7 @@ begin
       Exit(i);
     end;
   raise Exception.Create('Cannot replace renderer for ' + AElementClass.ClassName);
-end;
+end;       
 
 constructor TmnwElementRenderers.Create;
 begin
@@ -2712,8 +3069,8 @@ begin
     Result := Find(aClass);
     if Result <> nil then
     begin
-      if aClass <> AElementClass then
-        Result := RegisterRenderer(AElementClass, Result.RendererClass);
+      {if aClass <> AElementClass then
+        Result := RegisterRenderer(AElementClass, Result.RendererClass);}
       Exit;
     end;
     if aClass.ClassParent.InheritsFrom(TmnwElement) then
@@ -2734,21 +3091,6 @@ begin
   else
     Result := TmnwElementRenderer;
 end;}
-
-{ TmnwSchemaObject }
-
-constructor TmnwSchemaObject.Create;
-begin
-  inherited Create;
-  FLock := TCriticalSection.Create;
-end;
-
-destructor TmnwSchemaObject.Destroy;
-begin
-  FreeAndNil(Schema);
-  FreeAndNil(FLock);
-  inherited;
-end;
 
 { TmnwWeb }
 
@@ -2774,7 +3116,7 @@ end;
 procedure TmnwWeb.Stop;
 begin
   FShutdown := True;
-  ClearSchemas;
+  CleanSchemas;
   Started := False;
 end;
 
@@ -2807,7 +3149,7 @@ begin
   Result := nil;
   for i := 0 to Count - 1 do
   begin
-    if SameText(Items[i].Name, aSchemaName) and (not (schemaSession in Items[i].GetCapabilities) or (aSessionID = Items[i].SessionID)) then
+    if SameText(Items[i].Name, aSchemaName) and (not (schemaSession in Items[i].GetCapabilities) or (aSessionID = Items[i].Reference)) then
       Result := Items[i];
     if Result <> nil then
       break;
@@ -2818,7 +3160,7 @@ function TmnwWeb.CreateSchema(const aSchemaName: string): TmnwSchema;
 var
   SchemaItem: TmnwRegisterdSchema;
 begin
-	SchemaItem := Registered.Find(aSchemaName);
+  SchemaItem := Registered.Find(aSchemaName);
   if SchemaItem <> nil then
   begin
     Result := CreateSchema(SchemaItem);
@@ -2833,7 +3175,7 @@ end;
 
 function TmnwWeb.ReleaseSchema(const aSchemaName: string; aSessionID: string): TmnwSchema;
 begin
-  Lock.Enter;
+  Lock.BeginWrite;
   try
     Result := FindBy(aSchemaName, aSessionID);
     if Result <> nil then
@@ -2842,35 +3184,35 @@ begin
       Result.FPhase := scmpReleased;
     end;
   finally
-    Lock.Leave
+    Lock.EndWrite
   end;
 end;
 
 //Main
-function TmnwWeb.InquireElement(var AContext: TmnwContext; FindNested: Boolean): Boolean;
+function TmnwWeb.InquireElement(var Context: TmnwContext; FindNested: Boolean): Boolean;
 var
   aElement: TmnwElement;
-  Routes: TStringList;
+  aRoutes: TStringList;
   i: Integer;
   aSchemaName, aRoute: string;
   aSchema: TmnwSchema; 
 begin  
   aSchema := nil;
   Result := False;
-  Routes := TStringList.Create;
+  aRoutes := TStringList.Create;
   try
-    StrToStrings(AContext.Route, Routes, [URLDelimiter]);
-    if (Routes.Count > 0) then
-      aSchemaName := Routes[0]
+    StrToStrings(Context.CurrentPath, aRoutes, [URLDelimiter]);
+    if (aRoutes.Count > 0) then
+      aSchemaName := aRoutes[0]
     else
       aSchemaName := '';
 
     //Find already exists Schema
-    Lock.Enter;
+    Lock.BeginRead;
     try
-      aSchema := FindBy(aSchemaName, AContext.SessionID);
+       aSchema := FindBy(aSchemaName, Context.Session.ID);
     finally
-      Lock.Leave;
+      Lock.EndRead;
     end;
 
     if aSchema = nil then // Not cached, create it.
@@ -2878,76 +3220,94 @@ begin
       aSchema := CreateSchema(aSchemaName);
       if aSchema = nil then  //* Fallback
       begin
-        Lock.Enter;
+        Lock.BeginRead;
         try
-          aSchema := FindBy('', AContext.SessionID);
+          aSchema := FindBy('', Context.Session.ID);
         finally
-          Lock.Leave;
+          Lock.EndRead;
         end;
         if aSchema = nil then
           aSchema := CreateSchema('');
-{        if Schema = nil then
-          Schema := CreateSchema(DefaultSchema);}
+
+        if (aSchema = nil) and (aSchemaName = '') then
+        begin
+          Context.Response.RespondRedirectTo(EndURL(FallbackTo));
+          exit;
+        end;
+          
         if aSchema <> nil then
           aSchemaName := '';
       end;
 
       if (aSchema <> nil) and (schemaSession in aSchema.GetCapabilities) then
-        aSchema.SessionID := AContext.SessionID;
+        aSchema.Reference := Context.Session.ID;
     end;
 
-{
-    if Schema = nil then
-      Schema := First; //* Fallback //taskeej
-}
     if aSchemaName <> '' then
     begin
-      if (Routes.Count > 0) then
+      if (aRoutes.Count > 0) then
       begin
-        Routes.Delete(0);
-        AContext.Route := DeleteSubPath(aSchemaName, AContext.Route);
+        aRoutes.Delete(0);
+        Context.CurrentPath := DeleteSubPath(aSchemaName, Context.CurrentPath);
       end;
     end;
 
-    Lock.Enter;
+    Lock.BeginRead;
     try
       if aSchema <> nil then
-        Inc(aSchema.Usage);
+        AtomicIncrement(aSchema.Usage);
     finally
-      Lock.Leave;
+      Lock.EndRead;
     end;
 
     if (aSchema <> nil) then
     begin
-      AContext.Schema := aSchema;      
+      Context.Schema := aSchema;
 
-      AContext.SessionID := AContext.Request.Params.Values['session'];
-      if AContext.SessionID = '' then
-        AContext.SessionID := AContext.Request.Cookies.Values['session'];
+      Context.Session.ID := Context.Request.Params['session'];
+      if Context.Session.ID = '' then
+        Context.Session.ID := Context.Request.Cookies['session'];
+      Context.Session.Age := SessionAge;
+      Context.Session.Domain := Context.Request.Domain;
+      Context.Session.Path := Context.GetBasePath;
+      //AResponse.Session.Path := StartURL(Alias, True);
+      Context.Session.Reset;
       
-      if aSchema.Accept(AContext) then
+      Context.Language := Context.Request.Params['language'];
+      if Context.Language = '' then
+        Context.Language := Context.Request.Cookies['language'];
+      if Context.Language = '' then
+        Context.Language := Context.Web.Language;
+        
+      if SameText(Context.Language, 'ar') then
+        Context.Direction := dirRightToLeft
+      else
+        Context.Direction := dirLeftToRight;
+
+      if aSchema.Accept(Context) then
       begin
         if not (estComposed in aSchema.State) then
         begin
-          aSchema.Lock.Enter;
+          aSchema.Enter;
           try
+            if not (estComposed in aSchema.State) then //Check again after Enter, while waiting can be composed
             try
-              aSchema.Compose(AContext); //Compose
+              aSchema.Compose(Context); //Compose
             except
-              aSchema.Lock.Leave;
-              AContext.Schema := nil;
+              aSchema.Leave;
+              Context.Schema := nil;
               FreeAndNil(aSchema);
               raise;
             end;
           finally
             if aSchema <> nil then
-                aSchema.Lock.Leave;
+                aSchema.Leave;
           end;
         end;
 
         if (estComposed in aSchema.State) then
         begin                 
-          AContext.Element := aSchema;
+          Context.Element := aSchema;
 
           Result := True;
 
@@ -2956,9 +3316,9 @@ begin
             //Finding nested element inside Schema
             aElement := aSchema;
             i := 0;
-            while i < Routes.Count do
+            while i < aRoutes.Count do
             begin
-              aRoute := Routes[i];
+              aRoute := aRoutes[i];
               if aRoute = '' then
               begin
                 Result := True;
@@ -2974,9 +3334,9 @@ begin
                 end
                 else
                 begin
-                  AContext.Element := aElement;
+                  Context.Element := aElement;
                   Result := True;
-                  AContext.Route := DeleteSubPath(aRoute, AContext.Route);
+                  Context.CurrentPath := DeleteSubPath(aRoute, Context.CurrentPath);
                 end;
               end;
               inc(i);
@@ -2986,101 +3346,93 @@ begin
       end;
     end;
   finally
-    Routes.Free;
+    aRoutes.Free;
   end;
 end;
 
-procedure TmnwWeb.Respond(var AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwWeb.Respond(var Context: TmnwContext);
 begin
   if Shutdown then
     exit;
 
   try
-    InquireElement(AContext, True);
-    if AContext.Element <> nil then
+    InquireElement(Context, True);
+    if Context.Element <> nil then
     begin      
-      AResponse.Answer := hrOK;
-      AResponse.Redirect := '';
-      AResponse.SessionID := AResponse.Request.GetCookie('', 'session');
-      AResponse.Session.Age := DefaultAge;
-      AResponse.Session.Domain := Domain;
-      //AResponse.Session.Path := StartURL(Alias, True);
-      AResponse.Session.Path := AContext.GetHomePath;
-      AResponse.Session.ResetChanged;
-
+      Context.Response.Answer := hrOK;
+      Context.Response.Redirect := '';
 //      AResponse.Header['access-control-allow-origin'] := AResponse.Request.Host;
-      AResponse.Header['access-control-allow-origin'] := '*';
-      AResponse.PutHeader('Access-Control-Allow-Headers', 'Location, Content-Type, Authorization, Accept, Origin, X-PINGOTHER'); 
+      Context.Response.Header['access-control-allow-origin'] := '*';
+      Context.Response.PutHeader('Access-Control-Allow-Headers', 'Location, Content-Type, Authorization, Accept, Origin, X-PINGOTHER');
 
       //AResponse.Header['Access-Control-Allow-Headers'] := ' X-PINGOTHER, Content-Type';
       //AResponse.Header['Access-Control-Allow-Methods'] := 'HEAD,POST,GET,OPTIONS,PUT,DELETE,CONNECT,TRACE,PATCH';
       //AResponse.Header['Access-Control-Expose-Headers'] := ' Content-Encoding, Kuma-Revision';     
 
-      if not AResponse.IsResponded then
-        AContext.Element.RespondInit(AContext, AResponse); //For check Login in header before redirecting if needed
+      if not Context.Response.IsResponded then
+        Context.Element.RespondInit(Context); //For check Login in header before redirecting if needed
 
       //* If you call schema name without ending by /
-      if not AResponse.IsResponded then
+      if not Context.Response.IsResponded then
       begin
-        if (AContext.Element = AContext.Schema) and (AContext.Schema.Name <> '') and (AContext.Route = '') then
-          AResponse.RespondRedirectTo(IncludeURLDelimiter(AContext.GetPath(AContext.Schema)))
+        if (Context.Element = Context.Schema) and (Context.Schema.Name <> '') and (Context.CurrentPath = '') then
+          Context.Response.RespondRedirectTo(IncludeURLDelimiter(Context.GetPath(Context.Schema)), True)
         else
-          AResponse.ContentType := AContext.Element.GetContentType(AContext.Route);
+          Context.Response.ContentType := Context.Element.GetContentType(Context.CurrentPath);
       end;
 
       //* Resume maybe come false in action
       //* We will render it now
-      if not AResponse.IsResponded then
+      if not Context.Response.IsResponded then
       begin
-        AContext.Element.PrepareRenderer(AContext); 
-        if not AResponse.IsResponded then
-          AContext.Element.Respond(AContext, AResponse);
+        Context.Element.PrepareRenderer(Context);
+        if not Context.Response.IsResponded then
+          Context.Element.Respond(Context);
       end;
 
-      if not (AResponse.IsHeaderSent) then
+      if not (Context.Response.IsHeaderSent) then
       begin
-        if (AResponse.Answer =hrOK) and (not AResponse.IsResponded) then
-          AResponse.RespondNoContent
-        else if AResponse.Answer = hrNotFound then
-          AResponse.RespondNotFound;
+        if (Context.Response.Answer =hrOK) and (not Context.Response.IsResponded) then
+          Context.Response.RespondNoContent
+        else if Context.Response.Answer = hrNotFound then
+          Context.Response.RespondNotFound;
       end;
     end
     else
     begin
-      if not AResponse.IsHeaderSent then
-        AResponse.RespondNotFound;
+      if not Context.Response.IsHeaderSent then
+        Context.Response.RespondNotFound;
     end;
 
-    if AContext.Schema <> nil then
+    if Context.Schema <> nil then
     begin
-      Lock.Enter;
+      Lock.BeginWrite;
       try
-        AContext.Schema.LastAccess := Now;
-        Dec(AContext.Schema.Usage);
-        if (AContext.Schema.Usage = 0) and (AContext.Schema.Released) then
-          FreeAndNil(AContext.Schema)
+        Context.Schema.LastAccess := Now;
+        AtomicDecrement(Context.Schema.Usage);
+        if (Context.Schema.Usage = 0) and (Context.Schema.Released) then
+          FreeAndNil(Context.Schema)
         else
         begin
-          if AContext.Schema.Phase = scmpNew then
+          if Context.Schema.Phase = scmpNew then
           begin
-            AContext.Schema.FPhase := scmpNormal;
-            Add(AContext.Schema);
+            Context.Schema.FPhase := scmpNormal;
+            Add(Context.Schema);
           end;
         end;
       finally
-        Lock.Leave;
+        Lock.EndWrite;
       end;
     end;
   except
     {$ifdef DEBUG}
     on E: Exception do
     begin
-      if not (AResponse.IsHeaderSent) then
+      if not (Context.Response.IsHeaderSent) then
       begin
-        AResponse.Answer := hrError;
-        AResponse.ContentType := 'text/html';
+        Context.Response.RespondText('Server Error: ' + E.Message, hrError);
       end;
-      AResponse.SendUTF8String('Server Error: ' + E.Message);
+      raise;
     end;
     {$else}
       raise;
@@ -3088,18 +3440,18 @@ begin
   end;
 end;
 
-function TmnwWeb.Attach(var AContext: TmnwContext; Sender: TObject; AStream: TmnBufferStream): TmnwAttachment;
+function TmnwWeb.Attach(var Context: TmnwContext; Sender: TObject; AStream: TmnBufferStream): TmnwAttachment;
 begin
   Result := nil;
   
   if Shutdown then
     exit(nil);
 
-  InquireElement(AContext, False);
-  if AContext.Schema <> nil then
+  InquireElement(Context, False);
+  if Context.Schema <> nil then
   begin
-    if AContext.Schema.Interactive or (schemaAttach in AContext.Schema.GetCapabilities) then    
-      AContext.Schema.Attach(AContext.Route, Sender, AStream)
+    if Context.Schema.Interactive or (schemaAttach in Context.Schema.GetCapabilities) then
+      Context.Schema.Attach(Context.CurrentPath, Sender, AStream)
   end
 end;
 
@@ -3123,14 +3475,14 @@ begin
   Result := SchemaClass.Create(Self, AName, AName);
 end;
 
-procedure TmnwWeb.ClearSchemas;
+procedure TmnwWeb.CleanSchemas;
 var
   i: Integer;
 begin
   i := Count-1;
   while i>=0 do
   begin
-    if not (schemaPermanent in Items[i].GetCapabilities) then
+    if not (schemaStatic in Items[i].GetCapabilities) then
       Delete(i);
     Dec(i);
   end;
@@ -3139,16 +3491,13 @@ end;
 constructor TmnwWeb.Create;
 begin
   FTimeStamp := GetTimeStamp;
-  FLock := TCriticalSection.Create;
+  FLock := TMREWSync.Create;
   FRegistered := TRegisteredSchemas.Create;
-  DefaultAge := -1; //Forever
+  SessionAge := msOneHour; //Forever
   FShowVersion := True;
+  FLanguage := 'en';
+  FAppPath := ExtractFilePath(ParamStr(0));
   inherited;
-end;
-
-function TmnwWeb.GetHostURL: string;
-begin
-  Result := ComposeHttpURL(IsSecure, Domain, Port);
 end;
 
 function TmnwWeb.CreateSchema(SchemaItem: TmnwRegisterdSchema): TmnwSchema;
@@ -3338,6 +3687,7 @@ end;
 procedure THTML.THTMLControl.Created;
 begin
   inherited;
+  MinSize := szUndefined;
   Size := szUndefined;
 end;
 
@@ -3374,7 +3724,10 @@ begin
   FSchema := Self;
   FIsRoot := True;
   FAttachments := TmnwAttachments.Create;
-  FLock := TCriticalSection.Create;
+  if schemaStatic in GetCapabilities then
+    FInternalLock := TCriticalSection.Create
+  else
+    FInternalLock := nil;
   RefreshInterval := 1;
   {$ifdef rtti_objects}
   CacheClasses;
@@ -3382,31 +3735,48 @@ begin
 end;
 
 destructor TmnwSchema.Destroy;
+var
+  LLock: TCriticalSection;
 begin
   FAttachments.Terminate;
+
+  // Drain: take the lock away first so any new caller sees nil,
+  // then acquire/release to wait for any thread currently inside.
+  LLock := FInternalLock;
+  FInternalLock := nil;
+  if LLock <> nil then
+  begin
+    LLock.Enter;
+    LLock.Leave;
+  end;
+
   FAttachments.Clear;
   FreeAndNil(FAttachments);
-  FreeAndNil(FLock);
+
+  FreeAndNil(LLock);
   FreeAndNil(FDefaultDocuments);
   inherited;
 end;
 
+// Executed from a thread of connection of WebSocket, it stay inside until the disconnect or terminate
 procedure TmnwSchema.Attach(Route: string; Sender: TObject; AStream: TmnBufferStream);
 var
-  Attachment: TmnwAttachment;
+  aAttachment: TmnwAttachment;
 begin
-  Attachment := TmnwAttachment.Create;
-  Attachment.Schema := Self;
-  Attachment.Stream := AStream;
-  Attachments.Add(Attachment);
+  if FAttachments = nil then //Maybe shutdowning
+    exit;
+  aAttachment := TmnwAttachment.Create;
+  aAttachment.Schema := Self;
+  aAttachment.Stream := AStream;
+  Attachments.Add(aAttachment);
   UpdateAttached;
+  if Attachments <> nil then
   try
-    Attachment.Loop;
-    if not Attachment.Terminated then
-      Attachment.Terminate;
+    aAttachment.Loop;
   finally
-    Attachments.Remove(Attachment);
-    UpdateAttached;
+    if not aAttachment.Terminated then
+      aAttachment.Terminate;
+    Attachments.Remove(aAttachment);//Already do Lock.BeginWrite
   end;
 end;
 
@@ -3420,31 +3790,31 @@ begin
     Schema.Attachments.SendMessage(AttachmentName, AMessage);
 end;
 
-function TmnwElement.ServeFile(HomeFolder: string; DefaultDocuments: TStringList; Options: TmodServeFiles; const AContext: TmnwContext; AResponse: TmnwResponse): Boolean;
+function TmnwElement.ServeFile(PublicPath: string; DefaultDocuments: TStringList; Options: TmodServeFiles; const Context: TmnwContext): Boolean;
 var
   aDocument, aRequestDocument, aFile: string;
   IsDocument, IsDirectory, Expanded: Boolean;
 begin
   Result := True;
-  if HomeFolder = '' then
+  if PublicPath = '' then
   begin
     Result := False;
     Exit;
   end;
 
-  WebExpandFile(HomeFolder, AContext.Route, aRequestDocument, False);
-  Expanded := WebExpandFile(HomeFolder, AContext.Route, aDocument, serveSmart in Options);
+  WebExpandFile(PublicPath, Context.CurrentPath, aRequestDocument, False);
+  Expanded := WebExpandFile(PublicPath, Context.CurrentPath, aDocument, serveSmart in Options);
 
   if not Expanded then
   begin
-    if (AContext.Route = '') or IsStrInArray(AContext.Route, ['\', '/']) then
+    if (Context.CurrentPath = '') or IsStrInArray(Context.CurrentPath, ['\', '/']) then
     begin
       if (serveIndexRoot in Options) and EndsDelimiter(aDocument) and DirectoryExists(aDocument) then
       begin
-        if StartsStr(HomeFolder, aDocument) then
-          ServeFolder(aDocument, Options, AContext, AResponse)
+        if StartsStr(PublicPath, aDocument) then
+          ServeDir(aDocument, Options, Context)
         else
-          AResponse.RespondUnauthorized;
+          Context.Response.RespondUnauthorized;
       end
       else
         Result := False;
@@ -3457,10 +3827,9 @@ begin
   IsDocument := FileExists(aDocument);
   IsDirectory := DirectoryExists(aDocument);
 
-  if ((AContext.Route = '') and not IsDocument) or
-     (not EndsDelimiter(aRequestDocument) and IsDirectory) then
+  if ((Context.CurrentPath = '') and not IsDocument) or (not EndsDelimiter(aRequestDocument) and IsDirectory) then
   begin
-    AResponse.RespondRedirectTo(AResponse.Request.Address);
+    Context.Response.RespondRedirectTo(IncludeURLDelimiter(Context.Request.Path)); //TODO short it
     Exit;
   end;
 
@@ -3479,41 +3848,41 @@ begin
 
     if IsDirectory and (serveIndex in Options) then
     begin
-      if StartsStr(HomeFolder, aDocument) then
-        ServeFolder(aDocument, Options, AContext, AResponse)
+      if StartsStr(PublicPath, aDocument) then
+        ServeDir(aDocument, Options, Context)
       else
-        AResponse.RespondUnauthorized;
+        Context.Response.RespondUnauthorized;
       Exit;
     end;
   end;
 
   if StartsText('.', ExtractFileName(aDocument)) then
-    AResponse.RespondForbidden
+    Context.Response.RespondForbidden
   else if IsDocument then
   begin
-    if StartsText(HomeFolder, aDocument) then
-      AResponse.SendFile(aDocument)
+    if StartsText(PublicPath, aDocument) then
+      Context.Response.SendFile(aDocument)
     else
-      AResponse.RespondUnauthorized;
+      Context.Response.RespondUnauthorized;
   end
   else
     Result := False;
 end;
 
-function TmnwElement.ServeFile(HomeFolder: string; Options: TmodServeFiles; const AContext: TmnwContext; AResponse: TmnwResponse): Boolean;
+function TmnwElement.ServeFile(PublicPath: string; Options: TmodServeFiles; const Context: TmnwContext): Boolean;
 begin
-  Result := ServeFile(HomeFolder, nil, Options, AContext, AResponse);
+  Result := ServeFile(PublicPath, nil, Options, Context);
 end;
 
-procedure TmnwElement.ServeFolder(APath: string; Options: TmodServeFiles; const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwElement.ServeDir(APath: string; Options: TmodServeFiles; const Context: TmnwContext);
 var
   Files: TStringList;
 
   procedure AddLink(const s: string);
   begin
-    AContext.Writer.OpenInlineTag('li');
-    AContext.Writer.AddInlineTag('a', 'href="' + s + '"', s);
-    AContext.Writer.CloseTag('li');
+    Context.Writer.OpenInlineTag('li');
+    Context.Writer.AddInlineTag('a', 'href="' + s + '"', s);
+    Context.Writer.CloseTag('li');
   end;
 
   procedure WriteSection(const ACaption: string; AFilter: TEnumFilesOptions; const AExtra: string = '');
@@ -3522,51 +3891,57 @@ var
   begin
     Files.Clear;
     EnumFiles(Files, APath, '*.*', AFilter);
-    AContext.Writer.AddTag('h2', '', ACaption);
-    AContext.Writer.OpenTag('ul');
+    Context.Writer.AddTag('h2', '', ACaption);
+    Context.Writer.OpenTag('ul');
     if AExtra <> '' then
       AddLink(AExtra);
     for s in Files do
       if not StartsText('.', s) then
         AddLink(s);
-    AContext.Writer.CloseTag('ul');
+    Context.Writer.CloseTag('ul');
   end;
 
 begin
-  AResponse.ContentType := DocumentToContentType('html');
+  Context.Response.ContentType := DocumentToContentType('html');
   Files := TStringList.Create;
   try
-    AContext.Writer.WriteLn('<!DOCTYPE html>');
-    AContext.Writer.OpenTag('html');
-    AContext.Writer.OpenTag('head');
-    AContext.Writer.AddTag('title', '', 'Index of ' + APath);
-    AContext.Writer.AddShortTag('link', 'rel="icon" href="data:,"'); //disable call favicon.ico
-    AContext.Writer.AddShortTag('meta', 'charset="UTF-8"');   
-    AContext.Writer.AddShortTag('meta', 'name="viewport" content="width=device-width, initial-scale=1"');
-    AContext.Writer.AddTag('style', '', 'body { font-family: monospace; }');
-    AContext.Writer.CloseTag('head');
-    AContext.Writer.OpenTag('body');
-    AContext.Writer.AddTag('h1', '', 'Index of ' + AContext.Route);
-    WriteSection('Folders', [efDirectory], '..');
+    Context.Writer.WriteLn('<!DOCTYPE html>');
+    Context.Writer.OpenTag('html');
+    Context.Writer.OpenTag('head');
+    Context.Writer.AddTag('title', '', 'Index of ' + APath);
+    Context.Writer.AddShortTag('link', 'rel="icon" href="data:,"'); //disable call favicon.ico
+    Context.Writer.AddShortTag('meta', 'charset="UTF-8"');
+    Context.Writer.AddShortTag('meta', 'name="viewport" content="width=device-width, initial-scale=1"');
+    Context.Writer.AddTag('style', '', 'body { font-family: monospace; }');
+    Context.Writer.CloseTag('head');
+    Context.Writer.OpenTag('body');
+    Context.Writer.AddTag('h1', '', 'Index of ' + Context.CurrentPath);
+    WriteSection('Dirs', [efDirectory], '..');
     WriteSection('Files', [efFile]);
-    AContext.Writer.CloseTag('body');
-    AContext.Writer.CloseTag('html');
+    Context.Writer.CloseTag('body');
+    Context.Writer.CloseTag('html');
   finally
     Files.Free;
   end;
 end;
 
-procedure TmnwSchema.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwSchema.DoRespond(const Context: TmnwContext);
 begin
-  if not (serveEnabled in ServeFiles) or not ServeFile(GetHomeFolder, DefaultDocuments, ServeFiles, AContext, AResponse) then    
-    Render(AContext, AResponse);
+  if not (serveEnabled in ServeFiles) or not ServeFile(GetPublicPath, DefaultDocuments, ServeFiles, Context) then
+    Render(Context);
 end;
 
-procedure TmnwSchema.DoAccept(var AContext: TmnwContext; var Resume: Boolean);
+procedure TmnwSchema.Enter;
+begin
+  if FInternalLock <> nil then
+    FInternalLock.Enter;
+end;
+
+procedure TmnwSchema.DoAccept(var Context: TmnwContext; var Resume: Boolean);
 begin
 end;
 
-procedure TmnwSchema.DoChildRespond(AElement: TmnwElement; const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwSchema.DoChildRespond(AElement: TmnwElement; const Context: TmnwContext);
 begin
 end;
 
@@ -3585,17 +3960,23 @@ begin
       element := FindByID(elementID);
       if element <> nil then
       begin
-        Lock.Enter;
+        Attachments.Lock.BeginRead;
         try
           element.ReceiveMessage(Json);
         finally
-          Lock.Leave;
+          Attachments.Lock.EndRead;
         end;
       end;
     finally
       Json.Free;
     end;
   end
+end;
+
+procedure TmnwSchema.Leave;
+begin
+  if FInternalLock <> nil then
+    FInternalLock.Leave;
 end;
 
 class procedure TmnwSchema.Registered;
@@ -3631,10 +4012,10 @@ begin
   Result := [];
 end;
 
-function TmnwSchema.Accept(var AContext: TmnwContext): Boolean;
+function TmnwSchema.Accept(var Context: TmnwContext): Boolean;
 begin
   Result := True;
-  DoAccept(AContext, Result);
+  DoAccept(Context, Result);
 end;
 
 {function TmnwSchema.Interactive: Boolean;
@@ -3642,7 +4023,7 @@ begin
   Result := schemaInteractive in GetCapabilities;
 end;}
 
-procedure TmnwSchema.Compose(const AContext: TmnwContext);
+procedure TmnwSchema.Compose(const Context: TmnwContext);
 begin
   inherited;
 end;
@@ -3654,7 +4035,7 @@ end;
 
 function TmnwSchema.GetReleased: Boolean;
 begin
-  Result := (FPhase = scmpReleased) or (schemaDynamic in GetCapabilities);
+  Result := (FPhase = scmpReleased) or not (schemaStatic in GetCapabilities);
 end;
 
 procedure TmnwSchema.SetDefaultDocuments(AValue: TStringList);
@@ -3662,10 +4043,13 @@ begin
   FDefaultDocuments.Assign(AValue);
 end;
 
+procedure TmnwSchema.SetPublicPath(const Value: string);
+begin
+  FPublicPath := Value;
+end;
+
 procedure TmnwSchema.Start;
 begin
-  if (HomeFolder = '') then
-    HomeFolder := Web.HomeFolder;
 end;
 
 function TmnwSchema.NewHandle: THandle;
@@ -3674,12 +4058,12 @@ begin
   Result := FNamingLastNumber;
 end;
 
-function TmnwSchema.GetHomeFolder: string;
+function TmnwSchema.GetPublicPath: string;
 begin
-  if HomeFolder = '' then
-    Result := Web.HomeFolder
+  if FPublicPath <> '' then
+    Result := FPublicPath
   else
-    Result := HomeFolder;
+    Result := Web.PublicPath;
 end;
 
 procedure TmnwSchema.UpdateAttached;
@@ -3751,9 +4135,9 @@ begin
   inherited;
 end;
 
-{ THTML.TInput }
+{ THTML.TCustomInput }
 
-procedure THTML.TInput.SetValue(const AValue: string);
+procedure THTML.TCustomInput.SetValue(const AValue: string);
 begin
   if FValue =AValue then Exit;
   FValue :=AValue;
@@ -3761,19 +4145,13 @@ begin
     SendInteractive('"command": "change", "content": ' + DQ(Value));
 end;
 
-procedure THTML.TInput.SetCaption(const AValue: string);
-begin
-  if FCaption =AValue then Exit;
-  FCaption :=AValue;
-end;
-
-procedure THTML.TInput.Created;
+procedure THTML.TCustomInput.Created;
 begin
   inherited;
   EditType := 'text';
 end;
 
-procedure THTML.TInput.ReceiveMessage(JSON: TDON_Pair);
+procedure THTML.TCustomInput.ReceiveMessage(JSON: TDON_Pair);
 begin
   if JSON['command'].AsString = 'change' then
   begin
@@ -3782,14 +4160,6 @@ begin
     if JSON['caption'].IsExists then
       FCaption := JSON['caption'].AsString;
   end;
-end;
-
-{ THTML.TInputPassword }
-
-procedure THTML.TInputPassword.Created;
-begin
-  inherited;
-  EditType := 'password';
 end;
 
 { THTML.TImageMemory }
@@ -3818,10 +4188,10 @@ begin
     Result := inherited GetRoute;
 end;
 
-procedure THTML.TImageMemory.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure THTML.TImageMemory.DoRespond(const Context: TmnwContext);
 begin
   Data.Seek(0, soBeginning);
-  AResponse.SendStream(Data, FileName, Data.Size, InstanceDate);
+  Context.Response.SendStream(Data, FileName, Data.Size, InstanceDate);
 end;
 
 procedure THTML.TImageMemory.LoadFromFile(const AFileName: string);
@@ -3857,6 +4227,14 @@ begin
     Result := Route;
 end;
 
+function TmnwElement.GetPathClasses: string;
+begin
+  if (Parent <> nil) then
+    Result := AddEndURLDelimiter(Parent.GetPathClasses) + ClassName
+  else
+    Result := ClassName;
+end;
+
 function TmnwElement.GetPathTo(ToElement: TmnwElement): string;
 begin
   if (Self = nil) or (Self = ToElement) then
@@ -3886,6 +4264,17 @@ end;
 function TmnwElement.GetRoute: String;
 begin
   Result := FRoute;
+end;
+
+procedure TmnwElement.SetOnRespond(const Value: TRespondProc);
+begin
+  FOnRespond := Value;
+  {$ifopt D+}
+  {$ifdef Warn}
+  if (Schema <> nil) and (schemaDynamic in Schema.GetCapabilities) then
+    log.WriteLn(lglWarning, 'You are using OnRespond in dynamic schema:' + GetPathClasses);
+  {$endif}
+  {$endif}
 end;
 
 procedure TmnwElement.SetRenderIt(const Value: Boolean);
@@ -4018,6 +4407,8 @@ function TmnwElement.FindByRoute(const ARoute: string; Level: Integer): TmnwElem
 var
   i: Integer;
 begin
+  if EndRoute then //Not tested yet
+    exit(self);   
   // Find route only on first level, but we ignore the level of route = ''
   for i := 0 to Count - 1 do
   begin
@@ -4033,7 +4424,7 @@ begin
   Result := nil;
 end;
 
-procedure TmnwElement.DoCompose(const AContext: TmnwContext);
+procedure TmnwElement.DoCompose(const Context: TmnwContext);
 begin
 end;
 
@@ -4104,15 +4495,15 @@ begin
   Result := Name;
 end;
 
-procedure TmnwElement.DoPrepareRenderer(const AContext: TmnwContext);
+procedure TmnwElement.DoRequired(const Context: TmnwContext);
 begin
 end;
 
-procedure TmnwElement.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwElement.DoRespond(const Context: TmnwContext);
 begin
 end;
 
-procedure TmnwElement.DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwElement.DoRespondHeader(const Context: TmnwContext);
 begin
 end;
 
@@ -4121,7 +4512,7 @@ begin
   inherited Create;
   FTimeStamp := GetTimeStamp;
   FEnabled := True;
-  FVisible := True;  
+  FVisible := True;
   FName := '';
   FAttributes := TmnwAttributes.Create;
   FKind := AKind;
@@ -4131,6 +4522,16 @@ begin
     FSchema:= FParent.FSchema;
     FParent.Add(Self);
   end;
+{$ifopt D+}
+{
+  if (Schema <> nil) and (schemaDynamic in Schema.GetCapabilities) then
+  begin
+    if (Schema <> Self) then
+      if Self.MethodAddress('DoRespond') <> @TmnwElement.DoRespond then
+        log.WriteLn(lglWarning, 'You are using DoRespond in dynamic schema: ' + GetPathClasses);
+  end;
+}
+{$endif}
 end;
 
 destructor TmnwElement.Destroy;
@@ -4171,34 +4572,44 @@ begin
       Exit(i);
 end;
 
-procedure TmnwElement.Respond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwElement.Respond(const Context: TmnwContext);
 begin
   if (Schema <> nil) and (Schema <> Self) then
-    Schema.DoChildRespond(Self, AContext, AResponse);
-  if not AResponse.IsResponded and Assigned(OnRespond) then
-    OnRespond(AContext, AResponse);
-//  if not AResponse.IsResponded then  
-  DoRespond(AContext, AResponse);
+    Schema.DoChildRespond(Self, Context);
+  if not Context.Response.IsResponded and Assigned(OnRespond) then
+    OnRespond(Context);
+//  if not Context.Response.IsResponded then
+  DoRespond(Context);
 end;
 
-procedure TmnwElement.Compose(const AContext: TmnwContext);
+procedure TmnwElement.Compose(const Context: TmnwContext);
 var
   o: TmnwElement;
 begin
 //  Clear; //*Should not clear here
 //  Prepare;
   AddState([estComposing]);
-  DoCompose(AContext);  
   UpdateElement(Self);
+  DoCompose(Context);
   for o in Self do
   begin
     if not (estComposed in o.State) then    
-      o.Compose(AContext); //Compose
+      o.Compose(Context); //Compose
   end;
   RemoveState([estComposing]);
 
   AddState([estComposed]);
   DoComposed;
+end;
+
+function TmnwElement.CountComposed: Integer;
+var
+  e: TmnwElement;
+begin
+  Result := 0;
+  for e in Self do
+    if not (elEmbed in e.Kind) then
+      Inc(Result);  
 end;
 
 procedure TmnwElement.DoComposed;
@@ -4238,10 +4649,9 @@ begin
   Result := 'text/html';
 end;
 
-procedure TmnwElement.RespondInit(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwElement.RespondInit(const Context: TmnwContext);
 begin
-//  AResponse.PutHeader('Content-Type', GetContentType(AContext.Route));
-  DoRespondHeader(AContext, AResponse);
+  DoRespondHeader(Context);
 end;
 
 { TmnwRenderer }
@@ -4259,7 +4669,7 @@ constructor TmnwRenderer.Create(AModule: TmodWebModule);
 {var
   o: TmnwRenderer.TmnwElementRendererRegister;}
 begin
-  FLibraries := TmnwUsedLibraries.Create(False);
+  FRequires := TmnwRequires.Create(False);
   inherited Create;
   FModule := AModule;
   FParams := TmnwAttributes.Create;
@@ -4274,13 +4684,13 @@ end;
 procedure TmnwRenderer.Created;
 begin
   inherited;
-  Libraries.Use(TWebElements_Library, 2000);
+  Require(TWebElements_Library);
 end;
 
 destructor TmnwRenderer.Destroy;
 begin
   FreeAndNil(FParams);
-  FreeAndNil(FLibraries);
+  FreeAndNil(FRequires);
   inherited;
 end;
 
@@ -4296,6 +4706,11 @@ end;
 class function TmnwRenderer.RegisterRenderer(AElementClass: TmnwElementClass; ARendererClass: TmnwElementRendererClass; Replace: Boolean): TmnwElementRendererRegister;
 begin
   Result := ElementRenderers.RegisterRenderer(AElementClass, ARendererClass, Replace);
+end;
+
+procedure TmnwRenderer.Require(ALibraryClass: TmnwLibraryClass);
+begin
+  Requires.Use(ALibraryClass);
 end;
 
 procedure TmnwRenderer.DoBeginRender;
@@ -4328,13 +4743,13 @@ end;
 
 { THTML.TFile }
 
-procedure TmnwSchema.TFile.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwSchema.TFile.DoRespond(const Context: TmnwContext);
 begin
   inherited;
   if ftResource in Options then
-    AResponse.SendResource(FileName, Route)
+    Context.Response.SendResource(FileName, Route)
   else
-    AResponse.SendFile(FileName);
+    Context.Response.SendFile(FileName);
 end;
 
 constructor TmnwSchema.TFile.Create(AParent: TmnwElement; AOptions: TFileOptions; AFileName: string; ARoute: string );
@@ -4354,10 +4769,10 @@ begin
   Result := DocumentToContentType(FileName);
 end;
 
-procedure TmnwSchema.TMemory.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwSchema.TMemory.DoRespond(const Context: TmnwContext);
 begin
   Data.Seek(0, soBeginning);
-  AResponse.SendStream(Data, FileName, Data.Size, FileDate);
+  Context.Response.SendStream(Data, FileName, Data.Size, FileDate);
 end;
 
 procedure TmnwSchema.TMemory.Created;
@@ -4396,10 +4811,10 @@ end;
 
 { THTML.TAssets }
 
-procedure THTML.TAssets.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure THTML.TAssets.DoRespond(const Context: TmnwContext);
 begin
   inherited;
-  ServeFile(Schema.GetHomeFolder, [serveDefault], AContext, AResponse);
+  ServeFile(Schema.GetPublicPath, [serveDefault], Context);
 end;
 
 function THTML.TAssets.GetContentType(Route: string): string;
@@ -4409,10 +4824,10 @@ end;
 
 { THTML.TFolder }
 
-procedure THTML.TFolder.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure THTML.TFolder.DoRespond(const Context: TmnwContext);
 begin
   inherited;
-  ServeFile(HomeFolder, ServeFiles, AContext, AResponse);
+  ServeFile(PublicPath, ServeFiles, Context);
 end;
 
 function THTML.TFolder.GetContentType(Route: string): string;
@@ -4420,15 +4835,15 @@ begin
   Result := DocumentToContentType(Route);
 end;
 
-{ THTML.TDynamicCompose }
+{ THTML.TCompose }
 
-constructor THTML.TDynamicCompose.Create(AParent: TmnwElement; AOnCompose: TComposeProc);
+constructor THTML.TCompose.Create(AParent: TmnwElement; AOnCompose: TComposeProc);
 begin
   inherited Create(AParent);
   OnCompose := AOnCompose;
 end;
 
-procedure THTML.TDynamicCompose.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure THTML.TCompose.DoRespond(const Context: TmnwContext);
 var
   Inner: TInner;
 begin
@@ -4437,19 +4852,19 @@ begin
   try
     Inner.FSchema := Schema;
     Inner.FParent := Self; //Fake Parent do not add it to the list;
-    Inner.IsRoot := AContext.Element = Self; // if compused from Schema of parents, or just directly composed
-    InnerCompose(Inner, AResponse);
+    Inner.IsRoot := Context.Element = Self; // if compused from Schema of parents, or just directly composed
+    InnerCompose(Inner, Context);
     if Assigned(OnCompose) then
-      OnCompose(Inner, AResponse);
-    Inner.Compose(AContext);
+      OnCompose(Inner, Context);
+    Inner.Compose(Context);
 
-    Inner.Render(AContext, AResponse);
+    Inner.Render(Context);
   finally
     Inner.Free;
   end;
 end;
 
-procedure THTML.TDynamicCompose.InnerCompose(Inner: TmnwElement; AResponse: TmnwResponse);
+procedure THTML.TCompose.InnerCompose(Inner: TmnwElement; const Context: TmnwContext);
 begin
 end;
 
@@ -4457,29 +4872,30 @@ end;
 
 procedure TmnwLibrary.AddHead(const Context: TmnwContext);
 var
-  source: TLibrarySource;
+  source: TmnwLibrarySource;
   url: string;  
   aDirection: TDirection;
   local: Boolean;
 begin
   for source in Sources do
   begin
-    aDirection := Context.Schema.Direction;
+    aDirection := Context.Direction;
     if aDirection = dirUndefined then
       aDirection := dirLeftToRight;      
     
-    if (source.Direction = dirUndefined) or (source.Direction = aDirection) then
+    if ((source.Direction = dirUndefined) or (source.Direction = aDirection)) and
+       ((Source.Language = '') or (Source.Language = Context.Language)) then    
     begin
       if source.Where in [stOnline, stResource]  then           
       begin
-        if (source.Value = '') or (source.Where = stResource) or CheckOffline(Context, source.Name) then
+        if (source.OnlineFile = '') or (source.Where = stResource) or CheckOffline(Context, source.Name) then
         begin
           url := EndUrl(Context.GetAssetsURL) + source.Name;
           local := True;
         end
         else 
         begin
-          url := source.Value;
+          url := source.OnlineFile;
           local:= False;
         end;
 
@@ -4499,8 +4915,8 @@ begin
       else
       begin
         case source.SourceType of
-          stStyle: Context.Writer.AddEmbedStyle(source.Value);
-          stScript: Context.Writer.AddEmbedScript(source.Value, libDefer in source.Options);
+          stStyle: Context.Writer.AddEmbedStyle(source.Text);
+          stScript: Context.Writer.AddEmbedScript(source.Text, libDefer in source.Options);
         end;
       end;
     end;    
@@ -4510,7 +4926,7 @@ end;
 function TmnwLibrary.CheckOffline(const Context: TmnwContext; const FileName: string): Boolean;
 begin
   with Context.Schema do
-    Result := (Web.OnlineFiles = olfOffline) or ((Web.OnlineFiles = olfSmart) and FileExists(IncludePathDelimiter(Context.GetAssetFolder) + FileName));
+    Result := (Web.OnlineFiles = olfOffline) or ((Web.OnlineFiles = olfSmart) and FileExists(IncludePathDelimiter(Context.GetAssetDir) + FileName));
 end;
 
 constructor TmnwLibrary.Create;
@@ -4548,7 +4964,7 @@ var
   i: Integer;
 begin
   Result := nil;
-  Lock.Enter;
+  Lock.BeginRead;
   try
     for i := 0 to Count - 1 do
       if (SameText(Items[i].Name, ALibraryName)) then
@@ -4557,14 +4973,14 @@ begin
         break;
       end;
   finally
-    Lock.Leave;
+    Lock.EndRead;
   end;
 end;
 
 constructor TmnwLibraries.Create;
 begin
   inherited Create;
-  FLock := TCriticalSection.Create;
+  FLock := TMREWSync.Create;
 end;
 
 destructor TmnwLibraries.Destroy;
@@ -4577,7 +4993,7 @@ function TmnwLibraries.Find(ALibraryClass: TmnwLibraryClass): TmnwLibrary;
 var
   i: Integer;
 begin
-  Lock.Enter;
+  Lock.BeginRead;
   try
     Result := nil;
     for i := 0 to Count - 1 do
@@ -4587,13 +5003,13 @@ begin
         break;
       end;
   finally
-    Lock.Leave;
+    Lock.EndRead;
   end;
 end;
 
 function TmnwLibraries.RegisterLibrary(ALibraryClass: TmnwLibraryClass; Priority: Integer): TmnwLibrary;
 begin
-  Lock.Enter;
+  Lock.BeginWrite;
   try
     Result := Find(ALibraryClass);
     if Result <> nil then
@@ -4602,7 +5018,7 @@ begin
     Result.Priority := Priority;
     Add(Result);
   finally
-    Lock.Leave;
+    Lock.EndWrite;
   end;
 end;
 
@@ -4611,9 +5027,7 @@ end;
 procedure TJQuery_Library.Created;
 begin
   inherited;
-//  Sources.Add(stScript, 'cdn.jsdelivr.net/npm/jquery@3.7.1/dist/', 'jquery.min.js');
-  Sources.Add(stScript, 'cdn.jsdelivr.net/npm/jquery@4.0.0/dist/', 'jquery.min.js');
-  //Sources.Add(stScript, 'https://code.jquery.com/jquery-4.0.0.min.js', 'jquery.min.js');
+  Sources.Add(stScript, 'https://cdn.jsdelivr.net/npm/jquery@4.0.0/dist/', 'jquery.min.js', '', []); //* no Differ
 end;
 
 { THTML }
@@ -4621,15 +5035,16 @@ end;
 procedure TWebElements_Library.Created;
 begin
   inherited;
+  Sources.Add(stScript, 'https://cdn.jsdelivr.net/npm/js-sha256@0.11.1/src/', 'sha256.min.js', '', []);
 //  Sources.Add(stScript, '', 'web-elements.js?v=' + IntToStr(GlobalTimeStamp));
 //  Sources.Add(stStyle, '', 'web-elements.css?v=' + IntToStr(GlobalTimeStamp));
-  Sources.Add(stScript, '', 'web-elements.js');
-  Sources.Add(stStyle, '', 'web-elements.css');
+  Sources.Add(stScript, stResource, 'web-elements.js', '?minilib\web\source\mnWebElements.js');
+  Sources.Add(stStyle, stResource, 'web-elements.css', '?minilib\web\source\mnWebElements.css');
 end;
 
 { THTML.TImage }
 
-procedure THTML.TImage.DoCompose(const AContext: TmnwContext);
+procedure THTML.TImage.DoCompose(const Context: TmnwContext);
 begin
   inherited;
 end;
@@ -4744,34 +5159,44 @@ end;
 
 { THTML.TCard }
 
+constructor THTML.TCard.Create(AParent: TmnwElement; AKind: TmnwElementKinds);
+begin
+  inherited;
+  FFooter := TCardFooter.Create(Self, [elEmbed, elInternal]);
+end;
+
 procedure THTML.TCard.Created;
 begin
   inherited;
+//  MinSize := szSmall;
+  Size := szMedium;
+  Shadow := shadowHairline;
 //  Shadow := shadowThin;
 end;
 
 { THTML.TForm }
 
-procedure THTML.TForm.DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure THTML.TForm.DoRespondHeader(const Context: TmnwContext);
 begin
   inherited;
-  if (RedirectTo <> '') and (AResponse.Answer = hrNone) then
+  if (RedirectTo <> '') and (Context.Response.Answer = hrNone) then
   begin
-    AResponse.Answer := hrRedirect;
-    AResponse.Redirect := RedirectTo;
+    Context.Response.Answer := hrRedirect;
+    Context.Response.Redirect := RedirectTo;
   end;
 end;
 
 procedure THTML.TForm.Created;
 begin
   inherited;
-  PostTo.Where := toElement;
+  Endpoint.Where := toElement;
+  CallScript := 'mnw.formPost(event)';
 end;
 
 procedure THTML.TForm.DoComposed;
 begin
   inherited;
-  if PostTo.Where = toElement then
+  if Endpoint.Where = toElement then
     NewRoute(Self);
 end;
 
@@ -4780,6 +5205,15 @@ end;
 constructor THTML.TParagraph.Create(AParent: TmnwElement; AText: string);
 begin
   inherited Create(AParent);
+  Text := AText;
+end;
+
+{ THTML.THeading }
+
+constructor THTML.THeading.Create(AParent: TmnwElement; ASize: Integer; AText: string);
+begin
+  inherited Create(AParent);
+  Size := ASize;
   Text := AText;
 end;
 
@@ -4793,12 +5227,12 @@ begin
   OnRespond := ActionProc;
 end;
 
-procedure THTML.TAction.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure THTML.TAction.DoRespond(const Context: TmnwContext);
 begin
   inherited;
   try
     Execute;
-    AContext.Writer.WriteLn('Executed');
+    Context.Writer.WriteLn('Executed');
   finally
   end;
 end;
@@ -4876,41 +5310,33 @@ end;
 //Main
 procedure TmnwWebCommand.RespondResult(var Result: TmodRespondResult);
 var
-  aContext: TmnwContext;
+  Context: TmnwContext;
   aDomain, aPort: string;
   aContent: string;
 begin
   inherited;
-  if (Request.Path = '') and (Request.URI <> '') then
+  if (Request.CurrentPath = '') and (Request.URI <> '') then
   begin
     Response.RespondRedirectTo(IncludeURLDelimiter(Request.URI));
     exit;
   end;
   AtomicIncrement(RendererID);
-  InitMemory(aContext, SizeOf(aContext));
+  InitMemory(Context, SizeOf(Context));
 
-  aContext.Route := DeleteSubPath('', Request.Path);
-  aContext.Sender := Self;
-  aContext.Request := Request;
+  //Remove leading /
+  Context.CurrentPath := RemoveStartURLDelimiter(Request.CurrentPath);
+  Context.Sender := Self;
+
+  Context.FResponse := Response;
+  Context.FWeb := Module.Web;
 
   if Module.Domain <> '' then
   begin
     aDomain := Module.Domain;
-    aPort := Module.Server.Port;
+    aPort := Module.Server.UsedPort;
   end
   else
-    SpliteStr(Request.Header['Host'], ':', aDomain, aPort);
-
-  if Module.Web.Domain = '' then
-  begin
-    Module.Web.Lock.Enter; //smart huh, first connection will setup the domain name, i don't like it
-    try
-      Module.Web.Domain := aDomain;
-      Module.Web.Port := aPort;
-    finally
-      Module.Web.Lock.Leave;
-    end;
-  end;
+    SplitStr(Request.Header['Host'], ':', aDomain, aPort);
 
   if (aDomain='') and Request.Connected then
     raise Exception.Create('Domain is not defined');
@@ -4918,44 +5344,40 @@ begin
   if Request.RequestType = rtWebSocket then
   begin
     //Serve the websocket
-    if (Module as TmnwWebModule).Web.Attach(aContext, Self, Response.Stream) = nil then
+    if (Module as TmnwWebModule).Web.Attach(Context, Self, Response.Stream) = nil then
       Result.Status := []; // Disconnect
   end
   else
   begin
-    aContext.Web := Module.Web;
-    aContext.Renderer := (Module as TmnwWebModule).CreateRenderer;
-    aContext.Renderer.RendererID := RendererID;
-    aContext.Renderer.Libraries.QuickSort;
-    aContext.Writer := TmnTidyWriter.Create('html', Response.Stream);
-    aContext.Writer.Compact := Module.Web.CompactMode;
+    Context.FRenderer := (Module as TmnwWebModule).CreateRenderer;
+    Context.Renderer.RendererID := RendererID;
+    Context.Renderer.Requires.QuickSort;
+    Context.FWriter := TmnTidyWriter.Create('html', Response.Stream);
+    Context.Writer.Compact := Module.Web.CompactMode;
 
     //yes always created, i maybe pass params that come from Query (after ? )
     if Request.RequestType = rtFormData then
     begin
-      aContext.Data := TmnMultipartData.Create(Request.Header.Field['Content-Type'].SubValue('boundary'), (Module as TmnwWebModule).WorkFolder + 'temp'); 
-      (aContext.Data as TmnMultipartData).Read(Request.Stream);
+      Context.Data := TmnMultipartData.Create(Request.Header.Field['Content-Type'].SubValue('boundary'), (Module as TmnwWebModule).PrivatePath + 'temp');
+      (Context.Data as TmnMultipartData).Read(Request.Stream);
     end
     else if Request.RequestType = rtJSONData then
     begin
-      if aContext.Request.ReadString(aContent) then
-        aContext.Data := JsonParseValueString(aContent, [])
+      if Context.Request.ReadString(aContent) then
+        Context.Data := JsonParseValueString(aContent, [])
       else
-        aContext.Data := TDON_Pair.Create(nil);
+        Context.Data := TDON_Pair.Create(nil);
     end
     else
-      aContext.Data := TDON_Pair.Create(nil);
+      Context.Data := TDON_Pair.Create(nil);
     
-    try
-      Response.Answer := hrOK;
-      Response.ContentType := DocumentToContentType('html');
-      (Module as TmnwWebModule).Web.Respond(aContext, Response);
-
-      //SessionID
+    try          
+//      Response.ContentType := DocumentToContentType('html');
+      Module.Web.Respond(Context); //Main
     finally
-      FreeAndNil(aContext.Writer);
-      FreeAndNil(aContext.Renderer);
-      FreeAndNil(aContext.Data);
+      FreeAndNil(Context.Writer);
+      FreeAndNil(Context.Renderer);
+      FreeAndNil(Context.Data);
     end;
   end;
 end;
@@ -4975,76 +5397,69 @@ end;
 
 procedure TAssetsSchema.Start;
 var
-  minilib: string;
+  aLibrary: TmnwLibrary;
+  aSource: TmnwLibrarySource;
+  {$ifdef LOCAL_RESOURCE}
+  aLocalFile: string;
+  {$endif}
+  aName: string;
 begin
   inherited;
   Name := 'Assets';
   Route := 'assets';
-  //TCSSFile.Create(This, [ftResource], 'mnWebElements.css');
-  {$ifdef MINILIB}  
-  minilib := GetEnvironmentVariable('minilib');
-  if minilib <> '' then //Working in Developer PC
-  begin
-    TFile.Create(This, [], ExpandFileName(IncludePathDelimiter(minilib) + '/web/source/mnWebElements.js'), 'web-elements.js');
-    TFile.Create(This, [], ExpandFileName(IncludePathDelimiter(minilib) + '/web/source/mnWebElements.css'), 'web-elements.css');  
-  end
-  else
-  {$endif}
-  begin
-    if FileExists(GetHomeFolder + 'web-elements.js') then
-    begin
-      //Files
-      TFile.Create(This, [], GetHomeFolder + 'web-elements.js', 'web-elements.js');
-      TFile.Create(This, [], GetHomeFolder + 'web-elements.css', 'web-elements.css');
-    end
-    else
-    begin 
-      //Resources
-      TFile.Create(This, [ftResource], 'mnWebElements_css', 'web-elements.css');
-      TFile.Create(This, [ftResource], 'mnWebElements_js', 'web-elements.js');
-    end;
-  end;
-
-  {with TElement.Create(This, 'resource') do
-  begin
-      TFile.Create(This, [ftResource], 'mnWebElements_css', 'web-elements.css');
-      TFile.Create(This, [ftResource], 'mnWebElements_js', 'web-elements.js');
-  end;}
-
-  {// Register resource files from global libraries
-  Libraries.Lock.Enter;
+  
+  Libraries.Lock.BeginRead;
   try
-    for lib in Libraries do
+    for aLibrary in Libraries do
     begin
-      for source in lib.Sources do
+      for aSource in aLibrary.Sources do
       begin
-        if source.Where = stResource then
-        begin
-          if source.Value <> '' then
-            TFile.Create(This, [ftResource], source.Value, source.Name)
+        if stResource = aSource.Where then
+        begin    
+          aName := SubPath(aSource.LocalFile, -1);
+          {$ifdef LOCAL_RESOURCE}
+          //from original source
+          aLocalFile := ExpandFileName(VarEnvReplace(aSource.LocalFile));
+          if FileExists(aLocalFile) then
+            TFile.Create(This, [], aLocalFile, aSource.Name)
           else
-            TFile.Create(This, [ftResource], source.Name, source.Name);
+          {$endif}          
+          // From local Dir
+          if FileExists(IncludePathDelimiter(PublicPath) + aName) then          
+          begin
+            TFile.Create(This, [], IncludePathDelimiter(PublicPath) + aName, aSource.Name)          
+          end
+          else //From resources
+            TFile.Create(This, [ftResource], StringReplace(aName, '.', '_', [rfReplaceAll]), aSource.Name);
         end;
       end;
-    end;
+    end;    
   finally
-    Libraries.Lock.Leave;
-  end;}
+    Libraries.Lock.EndRead;
+  end;
 end;
 
-procedure TAssetsSchema.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TAssetsSchema.DoRespond(const Context: TmnwContext);
 begin
   inherited;
 end;
 
 class function TAssetsSchema.GetCapabilities: TmnwSchemaCapabilities;
 begin
-  Result := inherited + [schemaStartup, schemaPermanent];
+  Result := inherited + [schemaStartup, schemaStatic];
+end;
+
+function TAssetsSchema.GetPublicPath: string;
+begin
+  if FPublicPath <> '' then
+    Result := FPublicPath
+  else
+    Result := IncludePathDelimiter(Web.PublicPath) + Route;
 end;
 
 { TmnwWebModule }
 
-procedure TmnwWebModule.DoPrepareRequest(ARequest: TmodRequest);
+procedure TmnwWebModule.DoMatched(ARequest: TmodRequest);
 begin
   inherited;
   if (ARequest.Route.Count > 0) then
@@ -5069,21 +5484,23 @@ end;
 procedure TmnwWebModule.Start;
 begin
   inherited;
-//  AssetsURL := '/' + AliasName + '/' + Web.Assets.Route;
-  if Web.HomeFolder = '' then
-    Web.HomeFolder := HomeFolder;
-  if Web.Domain = '' then
-    Web.Domain := Domain;
-  if Web.Port = '' then
-    Web.Port := Server.Port;
-  if Web.WorkFolder = '' then
-    Web.WorkFolder := WorkFolder;
+  if Web.PublicPath = '' then
+    Web.PublicPath := PublicPath;
+  if Web.PrivatePath = '' then
+    Web.PrivatePath := PrivatePath;
   if Web.ModuleName = '' then
     Web.ModuleName := AliasName;
-  //Web.Assets.HomeFolder := Web.HomeFolder;
+  //Web.Assets.PublicPath := Web.PublicPath;
   Web.IsSecure := Server.IsSecure;
 
+//Maybe leave it to extract it from request
+{  if Web.Domain = '' then
+    Web.Domain := Domain;
+  if Web.Port = '' then
+    Web.Port := Server.UsedPort;}
+
   Web.Start;
+  Renderers.FStarted := True;
 end;
 
 procedure TmnwWebModule.Stop;
@@ -5125,7 +5542,7 @@ begin
   if Name = '' then
     exit(-1);
 
-  Result:= Find(Name);
+  Result:= IndexOf(Name);
   if Result < 0 then
   begin
     Items := Items + [Name];
@@ -5140,23 +5557,11 @@ begin
   PElementClasses(Sender)^.Add(S);
 end;
 
-procedure TElementClasses.Append(const S: string);
+procedure TElementClasses.Append(const S: string; Delimiter: string);
 var
   MatchCount: Integer;
 begin
-  StrToStringsExCallback(S, 0, @Self, [' '], MatchCount, @Classes_StrToStringsExCallbackProc, []);
-end;
-
-function TElementClasses.Find(const Name: string): Integer;
-var
- i: Integer;
-begin
-  for i := 0 to Length(Items) -1 do
-  begin
-    if SameText(Name, Items[i]) then
-      exit(i)
-  end;
-  Result := -1
+  StrToStringsExCallback(S, 0, @Self, [Delimiter, #13], MatchCount, @Classes_StrToStringsExCallbackProc, []);
 end;
 
 class operator TElementClasses.Add(A: TElementClasses; B: string): TElementClasses;
@@ -5173,6 +5578,11 @@ begin
   begin
     Add(itm);
   end;
+end;
+
+function TElementClasses.Exists(const Name: string): Boolean;
+begin
+  Result := IndexOf(Name) >= 0;
 end;
 
 class operator TElementClasses.Explicit(const Source: string): TElementClasses;
@@ -5192,6 +5602,18 @@ begin
   Result := Source.ToString
 end;
 
+function TElementClasses.IndexOf(const Name: string): Integer;
+var
+ i: Integer;
+begin
+  for i := 0 to Length(Items) -1 do
+  begin
+    if SameText(Name, Items[i]) then
+      exit(i)
+  end;
+  Result := -1
+end;
+
 procedure TElementClasses.Init(classes: string);
 begin
   InitMemory(Self, SizeOf(Self));
@@ -5202,7 +5624,7 @@ function TElementClasses.Remove(const Name: string): Boolean;
 var
   index: integer;
 begin
-  index := Find(Name);
+  index := IndexOf(Name);
   Result := index >= 0;
   if Result then
     Delete(Items, index, 1);
@@ -5212,13 +5634,20 @@ class operator TElementClasses.Subtract(A: TElementClasses; B: string): TElement
 var
   i: Integer;
 begin
-  i := A.Find(B);
+  i := A.IndexOf(B);
   if i>=0 then
     Delete(A.Items, i, 1);
   Result := A;
 end;
 
-function TElementClasses.ToString: string;
+function TElementClasses.ToString(const Initial: string): string;
+begin
+  Result := SpaceIf(Initial, Value);
+  if Result <> '' then
+    Result := 'class="' + Result + '"';
+end;
+
+function TElementClasses.Value: string;
 var
  itm : String;
 begin
@@ -5230,9 +5659,6 @@ begin
     else
       Result := itm;
   end;
-
-  if Result <> '' then
-    Result := 'class="'+Result+'"';
 end;
 
 { TmnwScope }
@@ -5242,13 +5668,25 @@ begin
   FreeAndNil(Attributes);
   Element := nil;
   Classes := Default(TElementClasses);
+  InnerClasses := Default(TElementClasses);
   WrapClasses := Default(TElementClasses);
 end;
 
-function TmnwScope.GetText: string;
+function TmnwScope.ToString(Select: TSelect; WithSpace: Boolean): string;
 begin
-  Result := ToString;
-  if (Result <> '') then
+  Result := '';
+  if (ssOuter in Select) then  
+    Result := Classes.Value;
+  if ssInner in Select then  
+    Result := SpaceIf(Result, InnerClasses.Value);  
+
+  if Result <> '' then
+    Result := 'class=' + DQ(Result);
+  
+  if ssAttributes in Select then  
+    Result := SpaceIf(Result, Attributes.ToString);    
+    
+  if WithSpace and (Result <> '') then
     Result := ' ' + Result;
 end;
 
@@ -5259,12 +5697,9 @@ begin
   Self.Element := AElement;
 end;
 
-function TmnwScope.ToString: string;
-var
-  s: string;
+function TmnwScope.ToString(WithSpace: Boolean): string;
 begin
-  s := Attributes.ToString;
-  Result := Space(s, Classes.ToString);
+  Result := ToString([ssAttributes, ssOuter, ssInner], WithSpace);
 end;
 
 { THTML.TLink }
@@ -5278,7 +5713,7 @@ end;
 
 { THTML.TCollapseCaption }
 
-procedure THTML.TCollapseCaption.DoCompose(const AContext: TmnwContext);
+procedure THTML.TCollapseCaption.DoCompose(const Context: TmnwContext);
 begin
   inherited;
 end;
@@ -5291,35 +5726,49 @@ begin
   Options := [dropArrow];
 end;
 
-{ THTML.TZoomButtons }
+{ THTML.TPopupMenu }
 
-procedure THTML.TZoomButtons.Created;
+procedure THTML.TPopupMenu.Created;
 begin
   inherited;
-  FButtonSmall := TButton.Create(Self, [elEmbed]);
+  Items := TStringList.Create;
+end;
+
+destructor THTML.TPopupMenu.Destroy;
+begin
+  FreeAndNil(Items);
+  inherited;
+end;
+
+{ TZoomButtons }
+
+procedure TZoomButtons.Created;
+begin
+  inherited;
+  FButtonSmall := THTML.TToolButton.Create(Self, [elEmbed]);
   FButtonSmall.Data := 'small';
   FButtonSmall.ControlStyle := styleUndefined;
-  FButtonSmall.Image.Symbol := 'icon mnw-font-small';
-  FButtonSmall.JSFunction := 'mnw.switch_zoom';
+  FButtonSmall.Image.Symbol := 'icon mnw-scale-down';
+  FButtonSmall.CallScript := 'mnw.switch_zoom(event)';
 
-  FButtonNormal := TButton.Create(Self, [elEmbed]);
+  FButtonNormal := THTML.TToolButton.Create(Self, [elEmbed]);
   FButtonNormal.Data := 'normal';
   FButtonNormal.ControlStyle := styleUndefined;
-  FButtonNormal.Image.Symbol := 'icon mnw-font-normal';
-  FButtonNormal.JSFunction := 'mnw.switch_zoom';
+  FButtonNormal.Image.Symbol := 'icon mnw-scale-reset';
+  FButtonNormal.CallScript := 'mnw.switch_zoom(event)';
 
-  FButtonLarge := TButton.Create(Self, [elEmbed]);
+  FButtonLarge := THTML.TToolButton.Create(Self, [elEmbed]);
   FButtonLarge.Data := 'large';
   FButtonLarge.ControlStyle := styleUndefined;
-  FButtonLarge.Image.Symbol := 'icon mnw-font-large';
-  FButtonLarge.JSFunction := 'mnw.switch_zoom';
+  FButtonLarge.Image.Symbol := 'icon mnw-scale-up';
+  FButtonLarge.CallScript := 'mnw.switch_zoom(event)';
 end;
 
 { THTML.THTMLGroup }
 
 function THTML.THTMLGroup.CanRender: Boolean;
 begin
-  Result := inherited CanRender and (Count>0);
+  Result := inherited CanRender and (Count > 0);
 end;
 
 { THTML.TSpan }
@@ -5330,7 +5779,13 @@ begin
   Text := AText;
 end;
 
-procedure THTML.TButton.Created;
+constructor THTML.TCustomButton.Create(AParent: TmnwElement; const ACaption: string);
+begin
+  inherited Create(AParent);
+  Caption := ACaption;
+end;
+
+procedure THTML.TCustomButton.Created;
 begin
   inherited;
   ControlStyle := stylePrimary;
@@ -5345,7 +5800,14 @@ end;
 
 function TmnwContext.GetPath(e: TmnwElement): string;
 begin
-  Result := GetHomePath + StartURL(e.GetPath);
+  Result := GetBasePath + StartURL(e.GetPath);
+end;
+
+function TmnwContext.GetPort: string;
+begin
+  Result := Web.Port;
+  if Result = '' then
+    Result := Request.Port;
 end;
 
 function TmnwContext.GetRelativePath(e: TmnwElement): string;
@@ -5356,42 +5818,66 @@ begin
     Result := e.GetPathTo(Element);
 end;
 
+function TmnwContext.GetRequest: TwebRequest;
+begin
+  Result := Response.Request;
+end;
+
+function TmnwContext.GetSchemaURL: string;
+begin
+  Result := GetHostURL + GetPath(Schema);
+end;
+
+function TmnwContext.GetSession: TmnwSession;
+begin
+  if Response <> nil then
+    exit(Response.Session);
+  Result := nil;  
+end;
+
 function TmnwContext.GetURL: string;
 begin
   Result := GetURL(Schema);
 end;
 
-function TmnwContext.GetHomePath: string;
+procedure TmnwContext.Require(ALibraryClass: TmnwLibraryClass; Priority: Integer);
 begin
-  Result := StartURL(Schema.Web.ModuleName + StartURL(Request.NameSpace));
+  Renderer.Require(ALibraryClass);
+end;
+
+function TmnwContext.GetBasePath: string;
+begin
+  Result := RemoveEndURLDelimiter(StartURL(Request.BasePath));
 end;
 
 function TmnwContext.GetHomeURL: string;
 begin
-  Result := Web.GetHostURL + GetHomePath;
+  Result := GetHostURL + GetBasePath;
 end;
 
 function TmnwContext.GetHostURL: string;
 begin
-  Result := Web.GetHostURL;
+  Result := ComposeHttpURL(Request.IsSecure, Domain, Port);
 end;
 
-function TmnwContext.GetLocationPath(Location: TLocation): string;
+function TmnwContext.GetLocationPath(AElement: TmnwElement; Location: TLocation): string;
 begin
   if Location.Where = toSchema then
-    Result := GetPath(Schema)
+    Result := EndURL(GetPath(Schema))
   else if Location.Where = toElement then
-    Result := GetPath(Element)
+    Result := EndURL(GetPath(AElement))
   else if Location.Where = toHome then
-    Result := GetHomePath
+    Result := EndURL(GetBasePath)
   else if Location.Where = toDefault then
     Result := GetDefaultPath;
-
+    
   if Location.Where = toCustom then
-    Result := Location.Custom
+    Result := EndURL(Location.Custom)
   else if Location.Custom <> '' then
-    Result := EndURL(Result) + Location.Custom
-
+    Result := EndURL(Result) + EndURL(Location.Custom);
+    
+  if Location.WithQuery and (Request.Query <> '') then
+    Result := Result + '?' + Request.Query;
 end;
 
 function TmnwContext.GetURL(e: TmnwElement): string;
@@ -5399,12 +5885,12 @@ begin
   Result := GetHomeURL + StartURL(e.GetPath);
 end;
 
-function TmnwContext.GetAssetFolder: string;
+function TmnwContext.GetAssetDir: string;
 begin
   if Schema.Web.Assets <> nil then
-    Result := Schema.Web.Assets.HomeFolder
+    Result := Schema.Web.Assets.PublicPath
   else
-    Result := Schema.Web.HomeFolder;
+    Result := Schema.Web.PublicPath;
 end;
 
 function TmnwContext.GetAssetsPath: string;
@@ -5424,107 +5910,85 @@ begin
     Result := Result + StartURL(Schema.Web.DefaultSchema.Name);
 end;
 
-{ TmnwResponse }
-
-procedure TmnwResponse.Created;
+function TmnwContext.GetDomain: string;
 begin
-  inherited;
-  FSession := TmnwCookie.Create('session');
-  FSession.Stricted := True;
-  FSession.Secured := False;
-  FSession.ResetChanged;
-end;
-
-destructor TmnwResponse.Destroy;
-begin
-  FreeAndNil(FSession);
-  inherited;
-end;
-
-procedure TmnwResponse.DoWriteCookies;
-var
-  s: string;
-begin
-  if Session.Changed then //If Value = '' that mean we will delete it
-  begin
-    s := Session.GetText;
-    Stream.WriteUTF8Line('Set-Cookie: ' + s);
-  end;
-  inherited;
-end;
-
-function TmnwResponse.GetSessionID: string;
-begin
-  Result := Session.Value;
-end;
-
-procedure TmnwResponse.SetAnswer(const Value: TmodAnswer);
-begin
-  inherited;  
-end;
-
-procedure TmnwResponse.SetSessionID(const Value: string);
-begin
-  Session.Value := Value;
+  Result := Web.Domain;
+  if Result = '' then
+    Result := Request.Domain;
 end;
 
 { TAuthSchema }
 
-procedure TAuthSchema.UserLogin(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TAuthSchema.UserLogin(const Context: TmnwContext);
 var
-  Success: Boolean;
-  Message: string;
-  SessionID: string;
+  aSuccess: Boolean;
+  aMessage: string;
+  aSessionID: string;
 begin
-  Success := False;
-  SessionID := '';
-  Message := '';
-  DoLogin(AContext, Success, Message, SessionID);
+  aSuccess := False;
+  aSessionID := '';
+  aMessage := '';
+  DoLogin(Context, aSuccess, aMessage, aSessionID);
 
-  if Success then
+  if aSuccess then
   begin
-    if AResponse.Request.RequestType = rtJSONData then    
-       AResponse.RespondJSON('{"type": "success", "state": "200", "message": "Login successed.", "redirect": "'+AContext.GetDefaultPath+'" }')
+    Context.Session.ID := aSessionID;
+    if Context.Request.RequestType = rtJSONData then
+       Context.Response.RespondJSON('{"type": "success", "state": "200", "message": "Login successed.", "redirect": "'+Context.GetDefaultPath+'" }')
     else
-      AResponse.RespondRedirectTo(AContext.GetDefaultPath);
+      Context.Response.RespondRedirectTo(Context.GetDefaultPath);
   end
   else
   begin
-    AResponse.RespondJSON('{"type": "error", "state": "301", "message": "'+Message+'" }', hrUnauthorized);
+    Context.Response.RespondJSON('{"type": "error", "state": "301", "message": "'+aMessage+'" }', hrUnauthorized);
   end;    
 end;
 
-procedure TAuthSchema.UserLogout(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TAuthSchema.UserLogout(const Context: TmnwContext);
 begin
-  AResponse.SessionID := '';
-  AResponse.RespondRedirectTo(AContext.GetDefaultPath);
+  Context.Session.ID := '';
+  Context.Response.RespondRedirectTo(Context.GetDefaultPath);
 end;
 
-procedure TAuthSchema.DoRespondHeader(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TAuthSchema.DoRespondHeader(const Context: TmnwContext);
 begin
-  if (AContext.Data <> nil) and SameText(AContext.Data.Values['execute'].AsString, 'true') then
+  if (Context.Data <> nil) and Context.Data.Values['password'].IsExists then
   begin
-    UserLogin(AContext, AResponse);
+    UserLogin(Context);
   end;
   inherited;
 end;
 
-procedure TAuthSchema.DoChildRespond(AElement: TmnwElement; const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TAuthSchema.Created;
 begin
   inherited;
-  if (AElement.Name = 'login-form') and (AContext.Data <> nil) and (SameText(AContext.Data.Values['execute'].AsString, 'true') ) then
+  with Document.Body.Main do
   begin
-    UserLogin(AContext, AResponse);
+    FLoginCard := TCard.Create(this);
+    with FLoginCard do
+    begin
+      FAuth := TAuthForm.Create(This);              
+      Auth.Form.CancelTo := toDefault;
+  end;
   end;
 end;
 
-procedure TAuthSchema.DoCompose(const AContext: TmnwContext);
+procedure TAuthSchema.DoChildRespond(AElement: TmnwElement; const Context: TmnwContext);
+begin
+  inherited;
+  if (AElement.Name = 'login-form') and (Context.Data <> nil) and (Context.Data.Values['password'].IsExists) then
+  begin
+    UserLogin(Context);
+  end;
+end;
+
+procedure TAuthSchema.DoCompose(const Context: TmnwContext);
 begin
   inherited;
   with Document do
   begin
     Title := 'Login';
-    Direction := dirLeftToRight;
+    //Direction := dirLeftToRight; We take it from language
 
     TAction.Create(This, 'login', 'login', UserLogin);
     TAction.Create(This, 'logout', 'logout', UserLogout);
@@ -5535,27 +5999,23 @@ begin
       
       with Main do
       begin
-        AlignItems := alignCenter;
-        with TCard.Create(this) do
+        with FLoginCard do
         begin
           Solitary := True;
-          Size := szNormal;
-          Caption := 'Login';
-
-          AuthForm := TAuthForm.Create(This);
-          AuthForm.Compose(AContext);
-          AuthForm.Form.CancelTo := toDefault;          
+          Size := szMedium;
+          Caption := _T('login', Context.Language, 'Login');
+//          Auth.Compose(Context);
         end;
       end;
     end;
   end;
 end;
 
-procedure TAuthSchema.DoLogin(const AContext: TmnwContext; out Success: Boolean; out Message: string; out SessionID: string);
+procedure TAuthSchema.DoLogin(const Context: TmnwContext; var Success: Boolean; var Message: string; var SessionID: string);
 begin
 end;
 
-procedure TAuthSchema.DoLogout(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure TAuthSchema.DoLogout(const Context: TmnwContext);
 begin
 end;
 
@@ -5566,10 +6026,10 @@ begin
   Result := (inherited CanRender) and (FileName <> '');
 end;
 
-procedure THTML.TImageFile.DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse);
+procedure THTML.TImageFile.DoRespond(const Context: TmnwContext);
 begin
   inherited;
-  AResponse.SendFile(FileName);
+  Context.Response.SendFile(FileName);
 end;
 
 function THTML.TImageFile.GetContentType(Route: string): string;
@@ -5592,45 +6052,54 @@ end;
 
 { TAuthForm }
 
-procedure TAuthForm.DoCompose(const AContext: TmnwContext);
+procedure TAuthForm.Created;
+begin
+  inherited;
+  FForm := THTML.TForm.Create(This);
+end;
+
+procedure TAuthForm.DoCompose(const Context: TmnwContext);
 begin
   Solitary := True;
-  Size := szNormal;
-  Caption := 'Login';
+  Caption := _T('login', Context.Language, 'Login');
 
   with THTML, Self do
   begin
-    Form := THTML.TForm.Create(This);
     with Form do
     begin
       Route := 'login';
       Name := 'login-form';
-      PostTo.Where := toElement;
-//      PostTo.Custom := 'login';
+      Endpoint.Where := toElement;
 
-      SubmitTo := 'return mnw.formPost(this, event)';
+      CallScript := 'mnw.formPost(event)';
 
       with TInput.Create(This) do
       begin
         ID := 'username';
         Name := 'username';
-        Caption := 'Username';
-        PlaceHolder := 'Type user name';
+        Caption := _T('username', Context.Language, 'Username');
+        PlaceHolder := _T('type.user.name', Context.Language, 'Type user name');
+        AutoFocus := True;
+        Required := True;
       end;
 
-      with TInputPassword.Create(This) do
+      with TPassword.Create(This) do
       begin
         ID := 'password';
         Name := 'password';
-        Caption := 'Password';
-        HelpText := 'You need to use numbers';
+        Caption := _T('password', Context.Language, 'Password');
+        HelpText := _T('you.need.numbers', Context.Language, 'You need to use letters numbers');
+        Token := Context.Web.PasswordToken;
       end;
 
-      TBreak.Create(This);
-
-      Submit.Caption := 'Submit';
-      Reset.Caption := 'Reset';
-      Cancel.Caption := 'Cancel'; 
+      if JWTMode or Context.Web.JWTmode then
+      begin
+        THiddenInput.Create(This, 'JWTMode', 'True');
+      end;
+      
+      Submit.Caption := _T('submit',  Context.Language, 'Submit');
+      Reset.Caption := _T('reset',  Context.Language, 'Reset');
+      Cancel.Caption := _T('cancel',  Context.Language,'Cancel') ;
     end;
   end;
   inherited;
@@ -5661,6 +6130,9 @@ end;
 
 function TmnwRenderers.RegisterRenderer(AName: string; ARendererClass: TmnwRendererClass): TmnwRendererRegister;
 begin
+  if Started then
+    raise Exception.Create('Once web app started you can''t register Renderer');
+
   if ARendererClass = nil then
     raise Exception.Create('RendererClass is null to register');
   Result := TmnwRendererRegister.Create;
@@ -5727,48 +6199,110 @@ end;
 
 { TLibrarySources }
 
-function TLibrarySources.Add(SourceType: TLibrarySourceType; Where: TLibrarySourceWhere; const OnlineFile, LocalFileName: string; Direction: TDirection; Integrity: string = ''; Options: TLibraryOptions = [libDefer, libCross]): TLibrarySource; 
+function TLibrarySources.Add(SourceType: TLibrarySourceType; Where: TLibrarySourceWhere; const OnlineFile, LocalFile: string; Integrity: string; Options: TLibraryOptions): TmnwLibrarySource; 
 begin
-  Result := TLibrarySource.Create;
-  Result.Name := LocalFileName;
+  Result := TmnwLibrarySource.Create;
+
+{ From where we get Name
+
+  online = 'min.file.js', local='file.min.js'
+                  ^
+  online = 'file.js', local='c:\assets\file.min.js'
+               ^
+  online = 'https://online.com/min.file.js', local='file.min.js'
+                                                        ^
+  online = 'https://online.com/', local='file.min.js'
+                                              ^
+  online = '', local='file.min.js'
+                            ^
+  online = 'https://online.com/file.js', local=''
+                                  ^
+  online = 'https://online.com/file.js', local='c:\assets\file.min.js'
+                                  ^
+}
+  Result.OnlineFile := OnlineFile;
+  Result.LocalFile := CorrectPath(VarEnvReplace(LocalFile, [vrPathValues]));
+
+  //online = 'https://online.com/min.file.js', local=''
+  if (OnlineFile <> '') and (Result.LocalFile = '') then
+  begin
+    Result.Name := SubStr(OnlineFile, PathDelimiters, -1);
+  end
+  //online = '', local='file.min.js'
+  //online = '', local='/path/file.min.js'
+  else if (OnlineFile = '') and (Result.LocalFile <> '') then
+  begin
+    Result.Name := SubStr(LocalFile, PathDelimiters, -1);
+    //Result.OnlineFile := OnlineFile;
+  end
+  //online = 'https://online.com/min.file.js', local='path/to/file/'
+  else if not EndsDelimiter(OnlineFile) and EndsDelimiter(Result.LocalFile) then
+  begin
+    Result.Name := SubStr(OnlineFile, PathDelimiters, -1);
+  end
+  //online = 'https://online.com/path/', local='path/to/file/file.js'
+  else if EndsDelimiter(OnlineFile) and not EndsDelimiter(Result.LocalFile) then
+  begin
+    Result.Name := SubStr(LocalFile, PathDelimiters, -1);
+    Result.OnlineFile := OnlineFile + Result.Name; //Fix online to full url
+  end
+  //online = 'https://online.com/path/file.js', local='path/to/file/file.js'
+  else
+  begin
+    if HaveChar(OnlineFile, PathDelimiters) then
+      Result.Name := SubStr(LocalFile, PathDelimiters, -1)
+    else
+      Result.Name := SubStr(OnlineFile, PathDelimiters, -1);
+  end;
+
+  if Result.Name = '' then
+    raise Exception.Create('Library: We need can''t guess alias name of source');
+
   Result.SourceType := SourceType;
   Result.Where := Where;
-  if EndsDelimiter(OnlineFile) then 
-    Result.Value := OnlineFile + LocalFileName
-  else  
-    Result.Value := OnlineFile;
-  Result.Direction := Direction;
   Result.Integrity := Integrity;
   Result.Options := Options;
   inherited Add(Result);
 end;
 
-function TLibrarySources.Add(SourceType: TLibrarySourceType; const OnlineFile, LocalFileName: string; Integrity: string; Options: TLibraryOptions): TLibrarySource;
+function TLibrarySources.Add(SourceType: TLibrarySourceType; const OnlineFile, LocalFile: string; Integrity: string; Options: TLibraryOptions): TmnwLibrarySource;
 begin
-  Result := Add(SourceType, stOnline, OnlineFile, LocalFileName, dirUndefined, Integrity, Options);
+  Result := Add(SourceType, stOnline, OnlineFile, LocalFile, Integrity, Options);
 end;
 
-function TLibrarySources.Add(SourceType: TLibrarySourceType; const OnlineFile, LocalFileName: string; Direction: TDirection): TLibrarySource;
+function TLibrarySources.AddEmbed(const SourceType: TLibrarySourceType; const AName: string; const EmbedText: string): TmnwLibrarySource;
 begin
-  Result := Add(SourceType, stOnline, OnlineFile, LocalFileName, Direction, '');
+  Result := TmnwLibrarySource.Create;
+  Result.Name := AName;
+  Result.Text := EmbedText;
+ 
+  Result.SourceType := SourceType;
+  Result.Where := stEmbed;
+  inherited Add(Result);
 end;
 
-function TLibrarySources.AddStyle(const EmbedText: string; Direction: TDirection): TLibrarySource;
+function TLibrarySources.Add(SourceType: TLibrarySourceType; const OnlineFile, LocalFile: string; Direction: TDirection): TmnwLibrarySource;
 begin
-  Result := Add(stStyle, stEmbed, EmbedText, '', Direction);
+  Result := Add(SourceType, stOnline, OnlineFile, LocalFile, '');
 end;
 
-{ TLibrarySource }
+function TLibrarySources.AddStyle(const EmbedText: string; AName: string; Direction: TDirection): TmnwLibrarySource;
+begin
+  Result := AddEmbed(stStyle, AName, EmbedText);
+  Result.Direction := Direction;
+end;
 
-constructor TLibrarySource.Create;
+{ TmnwLibrarySource }
+
+constructor TmnwLibrarySource.Create;
 begin
   inherited;
   Options := [libDefer, libCross];
 end;
 
-{ TmnwUsedLibraries }
+{ TmnwRequires }
 
-procedure TmnwUsedLibraries.Use(ALibraryClass: TmnwLibraryClass; Priority: Integer = 0);
+procedure TmnwRequires.Use(ALibraryClass: TmnwLibraryClass);
 var
   ALibrary: TmnwLibrary;
 begin
@@ -5777,14 +6311,14 @@ begin
     exit; //Already used
   ALibrary := Libraries.Find(ALibraryClass);
   if ALibrary = nil then
-    ALibrary := Libraries.RegisterLibrary(ALibraryClass, Priority);
+    ALibrary := Libraries.RegisterLibrary(ALibraryClass);
   if ALibrary <> nil then
     Add(ALibrary)
   else
     raise Exception.Create('Can''t register library: ' + ALibraryClass.ClassName);
 end;
 
-function TmnwUsedLibraries.Compare(Item1, Item2: TmnwLibrary): Integer;
+function TmnwRequires.Compare(Item1, Item2: TmnwLibrary): Integer;
 begin
   if Item1.Priority < Item2.Priority then
     Result := -1
@@ -5795,7 +6329,7 @@ begin
   //TODO use DependsOn
 end;
 
-function TmnwUsedLibraries.Find(ALibraryClass: TmnwLibraryClass): TmnwLibrary;
+function TmnwRequires.Find(ALibraryClass: TmnwLibraryClass): TmnwLibrary;
 var
   i: Integer;
 begin
@@ -5808,7 +6342,7 @@ begin
     end;
 end;
 
-procedure TmnwUsedLibraries.Use(ALibraryName: string);
+procedure TmnwRequires.Use(ALibraryName: string);
 var
   ALibrary: TmnwLibrary;
 begin
@@ -5855,11 +6389,13 @@ begin
   begin
     RegisterRenderer(THTML.THTMLElement, THTMLElement);
     RegisterRenderer(THTML.TComment ,TComment);
+    RegisterRenderer(THTML.TJSScript,TJSScript);    
 
     RegisterRenderer(THTML.TDocument, TDocument);
     RegisterRenderer(THTML.TBody, TBody);
 
-    RegisterRenderer(THTML.TDynamicCompose, TDynamicCompose);
+    RegisterRenderer(THTML.TOutput, TOutput);
+    RegisterRenderer(THTML.TCompose, TCompose);
     RegisterRenderer(THTML.TIntervalCompose, TIntervalCompose);
     
     RegisterRenderer(THTML.TFile, TFile);
@@ -5870,7 +6406,7 @@ end;
 
 { TmnwHTMLRenderer.TComment }
 
-procedure TmnwHTMLRenderer.TComment.DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwHTMLRenderer.TComment.DoInnerRender(Scope: TmnwScope; Context: TmnwContext);
 var
   e: THTML.TComment;
 begin
@@ -5881,19 +6417,19 @@ end;
 
 { TmnwHTMLRenderer.TFile }
 
-procedure TmnwHTMLRenderer.TFile.DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwHTMLRenderer.TFile.DoInnerRender(Scope: TmnwScope; Context: TmnwContext);
 var
   e: THTML.TFile;
 begin
   e := Scope.Element as THTML.TFile;
   if ftEmbed in e.Options then
-    Scope.Element.Respond(Context, AResponse);
+    Scope.Element.Respond(Context);
   inherited;
 end;
 
 { TmnwHTMLRenderer.TJSFile }
 
-procedure TmnwHTMLRenderer.TJSFile.DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwHTMLRenderer.TJSFile.DoInnerRender(Scope: TmnwScope; Context: TmnwContext);
 var
   e: THTML.TJSFile;
   src: string;
@@ -5901,7 +6437,7 @@ begin
   e := Scope.Element as THTML.TJSFile;
   if ftEmbed in e.Options then
   begin
-    Context.Writer.OpenTag('script', 'type="text/javascript"' + Scope.GetText);
+    Context.Writer.OpenTag('script', 'type="text/javascript"' + Scope.ToString(True));
     inherited;
     Context.Writer.WriteLn('');
     Context.Writer.CloseTag('script');
@@ -5916,7 +6452,7 @@ end;
 
 { TmnwHTMLRenderer.TCSSFile }
 
-procedure TmnwHTMLRenderer.TCSSFile.DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwHTMLRenderer.TCSSFile.DoInnerRender(Scope: TmnwScope; Context: TmnwContext);
 var
   e: THTML.TCSSFile;
   src: string;
@@ -5924,7 +6460,7 @@ begin
   e := Scope.Element as THTML.TCSSFile;
   if ftEmbed in e.Options then
   begin
-    Context.Writer.OpenTag('style', 'type="text/css"'+ Scope.GetText);
+    Context.Writer.OpenTag('style', 'type="text/css"'+ Scope.ToString(True));
     inherited;
     Context.Writer.WriteLn();
     Context.Writer.CloseTag('style');
@@ -5937,13 +6473,13 @@ begin
   end;
 end;
 
-{ TmnwHTMLRenderer.TDynamicCompose }
+{ TmnwHTMLRenderer.TCompose }
 
-procedure TmnwHTMLRenderer.TDynamicCompose.DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwHTMLRenderer.TCompose.DoInnerRender(Scope: TmnwScope; Context: TmnwContext);
 begin
   Context.Writer.OpenTag('div', Scope.Attributes.ToString);
   inherited;
-  Scope.Element.Respond(Context, AResponse);
+  Scope.Element.Respond(Context);
   Context.Writer.CloseTag('div');
 end;
 
@@ -5972,7 +6508,7 @@ begin
     Scope.Attributes['style'] := 'font-family: '+SQ(e.FontName)+'!important;';    
 end;
 
-procedure TmnwHTMLRenderer.TBody.DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwHTMLRenderer.TBody.DoInnerRender(Scope: TmnwScope; Context: TmnwContext);
 begin
   inherited;  
 end;
@@ -5985,19 +6521,16 @@ end;
 { TmnwHTMLRenderer.TDocument }
 
 procedure TmnwHTMLRenderer.TDocument.DoCollectAttributes(var Scope: TmnwScope; Context: TmnwContext);
-var
-  e: THTML.TDocument;
 begin
   inherited;
-  e := Scope.Element as THTML.TDocument;
-  if e.Schema.Direction = dirRightToLeft then
+  if Context.Direction = dirRightToLeft then
     Scope.Attributes['dir'] := 'rtl'
-  else if e.Schema.Direction = dirLeftToRight then
+  else if Context.Direction = dirLeftToRight then
     Scope.Attributes['dir'] := 'ltr';
-  Scope.Attributes['lang'] := When(Context.Schema.Web.Language <> '', Context.Schema.Web.Language, 'en');
+  Scope.Attributes['lang'] := When(Context.Language <> '', Context.Language, 'en');
 end;
 
-procedure TmnwHTMLRenderer.TDocument.DoInnerRender(Scope: TmnwScope; Context: TmnwContext; AResponse: TmnwResponse);
+procedure TmnwHTMLRenderer.TDocument.DoInnerRender(Scope: TmnwScope; Context: TmnwContext);
 var
   e: THTML.TDocument;
   aLibrary: TmnwLibrary;
@@ -6018,7 +6551,7 @@ begin
   begin
     AddHead(Scope, Context);
     //* Library Head
-    for aLibrary in Renderer.Libraries do
+    for aLibrary in Renderer.Requires do
     begin
       aLibrary.AddHead(Context);
     end;
@@ -6040,13 +6573,280 @@ begin
     end;
   end;}
   Context.Writer.CloseTag('head');
-  e.Body.Render(Context, AResponse);
+  e.Body.Render(Context);
   Context.Writer.CloseTag('html');
 end;
 
+{ TLangDropdown }
+
+procedure TLangDropdown.Created;
+begin
+  inherited;  
+//  Route := 'LLL';
+end;
+
+procedure TLangDropdown.DoCompose(const Context: TmnwContext);
+begin
+  inherited;
+  if Context.Language = 'ar' then
+    Image.Symbol := 'icon mnw-lang-arabic'             
+  else
+    Image.Symbol := 'icon mnw-lang-english';              
+//  Caption := Context.Language.ToUpper;
+//  Hint := Context.Language.ToUpper;    TODO fix it
+
+  with THTML.TDropdownItem.Create(this, Context.GetURL(Self) + '?lang=ar', 'عربي') do
+    Image.Symbol := 'icon mnw-lang-arabic';              
+  with THTML.TDropdownItem.Create(this, Context.GetURL(Self) + '?lang=en', 'English') do
+    Image.Symbol := 'icon mnw-lang-english';              
+end;
+
+procedure TLangDropdown.DoRespond(const Context: TmnwContext);
+var
+  Lang: string;
+  Referer: string;
+  Cookie: TmnwCookie;
+begin
+  Lang := Context.Request.Params['lang'];
+  if Lang = '' then
+    Lang := Context.Web.Language;
+
+  Cookie := Context.Response.SetCookie('language', Lang);
+  if Cookie <> nil then
+  begin
+    Cookie.Domain := Context.Domain;
+    Cookie.Path := Context.GetBasePath;
+    Cookie.Age := 365 * 24 * 60 * 60; // 1 year
+  end;
+
+  Referer := Context.Request.Header['Referer'];
+  if Referer <> '' then
+    Context.Response.RespondRedirectTo(Referer)
+  else
+    Context.Response.RespondRedirectTo(Context.GetURL);
+end;
+
+{ TmnwSession }
+
+constructor TmnwSession.Create;
+begin
+  FAge := 86400;
+end;
+
+procedure TmnwSession.Reset;
+begin
+  FChanged := False;
+end;
+
+procedure TmnwSession.SetAge(const Value: Integer);
+begin
+  if FAge = Value then
+    exit;
+  FAge := Value;
+  FChanged := True;
+end;
+
+procedure TmnwSession.SetDomain(const Value: string);
+begin
+  if FDomain = Value then
+    exit;
+  FDomain := Value;
+  FChanged := True;
+end;
+
+procedure TmnwSession.SetID(const Value: string);
+begin
+  if FID = Value then
+    exit;
+  FID := Value;
+  FChanged := True;
+end;
+
+procedure TmnwSession.SetInstance(const AInstance: TObject);
+begin
+  SetInteralInstance(AInstance);
+end;
+
+procedure TmnwSession.SetInteralInstance(const Value: TObject);
+begin
+  FInstance := Value;
+end;
+
+procedure TmnwSession.SetPath(const Value: string);
+begin
+  if FPath = Value then
+    exit;
+  FPath := Value;
+  FChanged := True;  
+end;
+
+{ TmnwResponse }
+
+constructor TmnwResponse.Create(ARequest: TmodRequest);
+begin
+  inherited;
+  FSession := TmnwSession.Create;
+end;
+
+destructor TmnwResponse.Destroy;
+begin
+  FreeAndNil(FSession);
+  inherited;
+end;
+
+procedure TmnwResponse.DoSendHeader;
+begin
+  inherited;
+end;
+
+procedure TmnwResponse.DoSetCookies;
+var
+  aOptions: TmnwCookieOptions;
+begin
+  inherited;
+  if Session.Changed then  
+  begin
+    aOptions := [HttpOnly];
+    if Request.IsSecure then
+      aOptions := aOptions + [Secured];
+
+    Cookies.SetCookie(Session.Domain, Session.Path, 'session', Session.ID, aOptions, When(Session.ID <> '', Session.Age, 0));
+    Session.Reset;
+  end;
+end;
+
+{ TmnwHTMLRenderer.TJSScript }
+
+procedure TmnwHTMLRenderer.TJSScript.DoInnerRender(Scope: TmnwScope; Context: TmnwContext);
+var
+  e: THTML.TJSScript;
+begin
+  e := Scope.Element as THTML.TJSScript;
+
+  Context.Writer.OpenTag('script', 'type="text/javascript"' + Scope.ToString(True));
+  inherited;
+  Context.Writer.WriteLines(e.Script);
+  Context.Writer.CloseTag('script');  
+end;
+
+{ THTML.TJSScript }
+
+constructor THTML.TJSScript.Create(AParent: TmnwElement; AScript: string);
+begin
+  inherited Create(AParent);
+  Script := AScript;
+end;
+
+{ THTML.TInput }
+
+constructor THTML.TInput.Create(AParent: TmnwElement; ACaption: string; AValue: string);
+begin
+  inherited Create(AParent);
+  Value := AValue;
+  Caption := ACaption;
+end;
+
+{ THTML.THTMLFormControl }
+
+procedure THTML.THTMLFormControl.SetCaption(const AValue: string);
+begin
+  if FCaption =AValue then Exit;
+  FCaption :=AValue;
+end;
+
+{ THTML.TUsername }
+
+procedure THTML.TUsername.Created;
+begin
+  inherited;
+  AutoComplete := True;
+end;
+
+{ THTML.TCountInput }
+
+procedure THTML.TCountInput.Created;
+begin
+  inherited;
+  Min := 0; //Defaults
+  Max := 100;
+end;
+
+{ THTML.TAccordionSection }
+
+function THTML.TAccordionSection.CanRender: Boolean;
+begin
+  Result := Count > 0;
+end;
+
+{ THTML.THiddenInput }
+
+constructor THTML.THiddenInput.Create(AParent: TmnwElement; const AName: string; const AValue: string);
+begin
+  inherited Create(AParent);
+  Name := AName;
+  Value := AValue;
+end;
+
+{ THTML.TThemeButton }
+
+procedure THTML.TThemeButton.Created;
+begin
+  inherited;
+  ControlStyle := styleUndefined;
+  Image.Symbol := 'icon mnw-theme';
+  CallScript := 'mnw.switch_theme(event)';
+end;
+
+{ TDarklyTheme_Library }
+
+procedure TDarklyTheme_Library.Created;
+begin
+  inherited;
+  Sources.Add(stStyle, stResource, 'darkly.css', '?minilib\web\source\bs-darkly.css', '', []);
+end;
+
+{ TCustomTheme_Library }
+{
+procedure TCustomTheme_Library.Created;
+begin
+  inherited;
+  Sources.Add(stStyle, stResource, 'bs-custom.css', '?minilib\web\source\bs-custom.css', '', []);
+end;
+}
+{ TmnwHTMLRenderer.TOutput }
+
+procedure TmnwHTMLRenderer.TOutput.DoInnerRender(Scope: TmnwScope; Context: TmnwContext);
+var
+  e: THTML.TOutput;
+begin
+  e := Scope.Element as THTML.TOutput;
+  if Assigned(e.OnOutput) then
+    e.OnOutput(Scope, Context);
+  inherited;
+end;
+
+{ THTML.TOutput }
+
+constructor THTML.TOutput.Create(AParent: TmnwElement; AOnOutput: TRenderProc);
+begin
+  inherited Create(AParent);
+  OnOutput := AOnOutput;
+end;
+
+{ TGapHelper }
+
+function TGapHelper.ToString: string;
+begin
+  Result := IntToStr(Self);
+end;
+
 initialization
-  GlobalTimeStamp := GetTimeStamp;
+  Libraries.RegisterLibrary(TWebElements_Library, 2000);
+  Libraries.RegisterLibrary(TDarklyTheme_Library, 2000);
+//  Libraries.RegisterLibrary(TCustomTheme_Library, 2002);
+  Libraries.RegisterLibrary(TJQuery_Library);
 finalization
   FreeAndNil(FRenderers);
   FreeAndNil(FLibraries);
+  FreeAndNil(Languages);
 end.

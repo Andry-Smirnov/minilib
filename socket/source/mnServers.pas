@@ -15,11 +15,17 @@ unit mnServers;
 
 {.$define NoLog}
 
+(* test
+
+  curl --parallel --parallel-max 50 -w "%{http_code}\n" http://localhost:10906/demo/home/[1-100]
+
+*)
+
 interface
 
 uses
   Classes, SysUtils, StrUtils,
-  mnUtils, mnOpenSSL, syncobjs, mnClasses,
+  mnUtils, mnOpenSSL, syncobjs, mnClasses, mnLogs,
   mnSockets, mnStreams, mnConnections;
 
 const
@@ -86,6 +92,7 @@ type
     constructor Create(vOwner: TmnConnections; vStream: TmnConnectionStream);
     destructor Destroy; override;
     procedure Disconnect; virtual;
+    procedure Detach;
     property Stream: TmnConnectionStream read FStream;
     property Listener: TmnListener read GetListener;
     property RemoteIP: string read FRemoteIP;
@@ -97,6 +104,15 @@ type
   TmnOnLog = procedure(const S: string) of object;
   TmnOnListenerNotify = procedure(Listener: TmnListener) of object;
 
+  TLockStringList = class(TStringList)
+  private
+    FLock: TCriticalSection;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    property Lock: TCriticalSection read FLock write FLock;
+  end;
+
   { TmnListener }
 
   TmnListener = class(TmnConnections) // thread to watch for incoming requests
@@ -104,7 +120,7 @@ type
     FServer: TmnServer;
     FTimeout: Integer;
     FSocket: TmnCustomSocket; //Listner socket waiting by call "select"
-    FLogMessages: TStringList;
+    FLogMessages: TLockStringList;
     FOptions: TmnsoOptions;
     FLastCheck: UInt64;
     FEvent: TEvent;
@@ -116,7 +132,7 @@ type
     function CreateStream(vSocket: TmnCustomSocket): TmnConnectionStream;
     procedure DoCreateStream(var Result: TmnConnectionStream; vSocket: TmnCustomSocket); virtual;
 
-    property LogMessages: TStringList read FLogMessages;
+    property LogMessages: TLockStringList read FLogMessages;
 
   protected //OpenSSL
     Context: TContext;
@@ -173,7 +189,6 @@ type
     FPort: string;
     FBind: string;
     FListener: TmnListener;
-    FLogging: Boolean;
     FIsSecure: Boolean;
     FIdleTick: UInt64;
     FIdleInterval: Int64;
@@ -182,6 +197,7 @@ type
     procedure SetPort(const Value: string);
     function GetCount: Integer;
     function GetConnected: Boolean;
+    function GetUsedPort: string;
   protected
     IsDestroying: Boolean;
     IsStopping: Boolean;
@@ -224,14 +240,17 @@ type
     property Listener: TmnListener read FListener;
     property Count: Integer read GetCount;
 
+    property IsSecure: Boolean read FIsSecure write FIsSecure;
+    //You set port to '0' to get random port from system
     property Port: string read FPort write SetPort;
+    //The used port if you set port to '0'
+    property UsedPort: string read GetUsedPort;
+    
     property Bind: string read FBind write SetBind;
     property Address: string read FBind write SetBind;//Deprecated
-    property IsSecure: Boolean read FIsSecure write FIsSecure;
 
     property Active: boolean read FActive write SetActive default False;
     property Started: boolean read FActive write SetActive default False;
-    property Logging: Boolean read FLogging write FLogging default False;
     property Connected: Boolean read GetConnected;
     property IdleInterval: Int64 read FIdleInterval write FIdleInterval default cIdleInterval;
   end;
@@ -430,6 +449,11 @@ begin
   inherited;
 end;
 
+procedure TmnServerConnection.Detach;
+begin
+  FStream := nil;
+end;
+
 function TmnServerConnection.GetListener: TmnListener;
 begin
   Result := Owner as TmnListener;
@@ -502,16 +526,17 @@ end;
 function TmnServer.GetCount: Integer;
 begin
   if Listener <> nil then
-  begin
-    Listener.Enter;
-    try
-      Result := Listener.Count;
-    finally
-      Listener.Leave;
-    end;
-  end
+    Result := Listener.Count
   else
     Result := 0;
+end;
+
+function TmnServer.GetUsedPort: string;
+begin
+  if Listener <> nil then  
+    Result := Listener.Port
+  else
+    Result := Port;
 end;
 
 procedure TmnServer.Idle(vListener: TmnListener);
@@ -588,7 +613,7 @@ begin
   inherited Create;
   FEvent := TEvent.Create(nil, False, False, '');
   FreeOnTerminate := False;
-  FLogMessages := TStringList.Create;
+  FLogMessages := TLockStringList.Create;
   FTimeout := cListenerTimeout;
 end;
 
@@ -620,7 +645,10 @@ end;
 
 function TmnListener.Accept: TmnCustomSocket;
 begin
-  Result := Socket.Accept(Options, Timeout);
+  if Socket = nil then
+    Result := nil
+  else
+    Result := Socket.Accept(Options, Timeout);
 end;
 
 procedure TmnListener.PostLogs;
@@ -630,7 +658,7 @@ var
  begin
   if FServer <> nil then
   repeat
-    Enter;
+    LogMessages.Lock.Enter;
     try
       b := LogMessages.Count > 0;
       if b then
@@ -641,7 +669,7 @@ var
       else
         s := '';
     finally
-      Leave;
+      LogMessages.Lock.Leave;
     end;
     if b then
       FServer.DoLog(s);
@@ -685,21 +713,24 @@ begin
     Event.SetEvent;
     while Connected and not Terminated do
     begin
-      aSocket := nil;
       try
-        if (Socket.Select(Timeout, slRead) = erSuccess) and not Terminated then
-        begin
-          aSocket := Accept;
-          if aSocket <> nil then
+        if (Socket <> nil) and (Socket.Select(Timeout, slRead) = erSuccess) and not Terminated and Connected then
           begin
-            UpdateChanged;
-            aSocket.Context := Context;
+            try
+              aSocket := Accept;
+            except
+              aSocket := nil;
+            end;
+            if aSocket <> nil then
+            begin
+              UpdateChanged;
+              aSocket.Context := Context;
+            end;
+          end
+          else
+          begin
+            aSocket := nil;
           end;
-        end
-        else
-        begin
-          aSocket := nil;
-        end;
 
         {Enter; //todo remove it;
         try
@@ -718,7 +749,6 @@ begin
 
           if (aSocket = nil) then
           begin
-
             //only if we need retry mode, attempt to connect new socket, for 3 times as example, that if socket disconnected for wiered reason
             {if (not Connected) and (FAttempts > 0) and (FTries > 0) then
             begin
@@ -790,20 +820,20 @@ end;
 
 procedure TmnListener.SetOptions(AValue: TmnsoOptions);
 begin
-  if FOptions =AValue then Exit;
-  FOptions :=AValue;
+  if FOptions = AValue then Exit;
+  FOptions := AValue;
   //TODO check if not connected
 end;
 
 procedure TmnListener.Log(S: string);
 begin
-  if Server.Logging then
+  if mnLogs.Log.Enabled then
   begin
-    Enter;
+    LogMessages.Lock.Enter;
     try
       LogMessages.Add(S);
     finally
-      Leave;
+      LogMessages.Lock.Leave;
     end;
     Queue(nil, PostLogs); //nil = queue not linked with this thread "RemoveQueuedEvents"
   end;
@@ -918,7 +948,7 @@ end;
 procedure TmnServer.BeforeDestruction;
 begin
   IsDestroying := True;
-  inherited BeforeDestruction;
+  inherited;
 end;
 
 destructor TmnServer.Destroy;
@@ -938,7 +968,7 @@ end;
 
 procedure TmnServer.Log(const S: string);
 begin
-  if Logging then
+  if mnLogs.Log.Enabled then
     DoLog(S);
 end;
 
@@ -1008,7 +1038,7 @@ begin
       DoStopping;
       FListener.Terminate;
       FListener.WaitFor;
-      aPort := FListener.Port;
+      aPort := FListener.Port; //for Log below
 
       //to process all queues
       //in case of service ThreadID<>MainThreadID :)
@@ -1178,6 +1208,20 @@ end;
 destructor TmnServerSocket.Destroy;
 begin
   inherited Destroy;
+end;
+
+{ TLockStringList }
+
+constructor TLockStringList.Create;
+begin
+  inherited Create;
+  FLock := TCriticalSection.Create;
+end;
+
+destructor TLockStringList.Destroy;
+begin
+  FLock.Free;
+  inherited;
 end;
 
 end.

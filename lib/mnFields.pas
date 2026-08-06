@@ -57,7 +57,6 @@ type
     Data: PByte;
   end;
 
-  { TmnCustomField }
 
   TmnCustomField = class abstract(TInterfacedPersistent, IField)
   private
@@ -107,6 +106,7 @@ type
     function ReadAsForeign: Int64;
     procedure WriteAsForeign(const Value: Int64);
     function ReadIsExists: Boolean;
+    function ReadIsEmpty: Boolean;
     function ReadAsAsUID: string;
     procedure WriteAsUID(const Value: string);
   protected
@@ -174,6 +174,7 @@ type
 
     property IsNull: Boolean read ReadIsNull write WriteIsNull;
     property IsExists: Boolean read ReadIsExists;
+    property IsEmpty: Boolean read ReadIsEmpty;
 
     procedure LoadFromStream(Stream: TStream); virtual;
     procedure SaveToStream(Stream: TStream); virtual;
@@ -191,7 +192,26 @@ type
     procedure Empty; virtual;//make value empty
     function Memory: TmncFieldMemory;
 
+  {$ifdef FPC_NOTYET}  
+  public  
     //class operator Implicit (f: TprmustomField): Integer; { TODO : when support by delphi }
+    class operator Implicit(a: TmnFieldValue): string;
+    class operator Implicit(a: string): TmnFieldValue;
+    class operator Implicit(a: TmnFieldValue): Integer;
+    class operator Implicit(a: Integer): TmnFieldValue;
+    class operator Implicit(a: TmnFieldValue): Int64;
+    class operator Implicit(a: Int64): TmnFieldValue;
+    class operator Implicit(a: TmnFieldValue): Double;
+    class operator Implicit(a: Double): TmnFieldValue;
+    class operator Implicit(a: TmnFieldValue): Boolean;
+    class operator Implicit(a: Boolean): TmnFieldValue;
+    class operator Implicit(a: TmnFieldValue): Currency;
+    class operator Implicit(a: Currency): TmnFieldValue;
+    class operator Implicit(a: TmnFieldValue): TDateTime;
+    class operator Implicit(a: TDateTime): TmnFieldValue;
+    class operator Implicit(a: TmnFieldValue): TDate;
+    class operator Implicit(a: TDate): TmnFieldValue;    
+  {$endif FPC}  
   end;
 
   TmnCustomFieldClass = class of TmnCustomField;
@@ -277,15 +297,105 @@ type
     function RemoveByName(const vName: string): Boolean;
     function ToString: string; override;
     //todo IndexOfName, IndexOf
+    property Exists[const Index: string]: Boolean read IsExists;
     property FieldByName[const Index: string]: TmnField read FindByName;
     property Field[const Index: string]: TmnField read FindField;
-    property Exists[const Index: string]: Boolean read IsExists;
     property Values[const Index: string]: Variant read GetValues write SetValues; default;
   end;
 
 implementation
 
 { TmnCustomField }
+
+{$ifdef FPC_NOTYET}
+class operator TmnCustomField.Implicit(a: TmnCustomField): string;
+begin
+  Result := a.AsString;
+end;
+
+class operator TmnCustomField.Implicit(a: string): TmnCustomField;
+begin
+  Result.FField := nil;
+  Result.FValue := a;
+end;
+
+class operator TmnCustomField.Implicit(a: TmnCustomField): Integer;
+begin
+  Result := a.AsInteger;
+end;
+
+class operator TmnCustomField.Implicit(a: Integer): TmnCustomField;
+begin
+  Result.FField := nil;
+  Result.FValue := a;
+end;
+
+class operator TmnCustomField.Implicit(a: TmnCustomField): Int64;
+begin
+  Result := a.AsInt64;
+end;
+
+class operator TmnCustomField.Implicit(a: Int64): TmnCustomField;
+begin
+  Result.FField := nil;
+  Result.FValue := a;
+end;
+
+class operator TmnCustomField.Implicit(a: TmnCustomField): Double;
+begin
+  Result := a.AsDouble;
+end;
+
+class operator TmnCustomField.Implicit(a: Double): TmnCustomField;
+begin
+  Result.FField := nil;
+  Result.FValue := a;
+end;
+
+class operator TmnCustomField.Implicit(a: TmnCustomField): Boolean;
+begin
+  Result := a.AsBoolean;
+end;
+
+class operator TmnCustomField.Implicit(a: Boolean): TmnCustomField;
+begin
+  Result.FField := nil;
+  Result.FValue := a;
+end;
+
+class operator TmnCustomField.Implicit(a: TmnCustomField): Currency;
+begin
+  Result := a.AsCurrency;
+end;
+
+class operator TmnCustomField.Implicit(a: Currency): TmnCustomField;
+begin
+  Result.FField := nil;
+  Result.FValue := a;
+end;
+
+class operator TmnCustomField.Implicit(a: TmnCustomField): TDateTime;
+begin
+  Result := a.AsDateTime;
+end;
+
+class operator TmnCustomField.Implicit(a: TDateTime): TmnCustomField;
+begin
+  Result.FField := nil;
+  Result.FValue := a;
+end;
+
+class operator TmnCustomField.Implicit(a: TmnCustomField): TDate;
+begin
+  Result := a.AsDate;
+end;
+
+class operator TmnCustomField.Implicit(a: TDate): TmnCustomField;
+begin
+  Result.FField := nil;
+  Result.FValue := a;
+end;
+{$endif FPC}  
 
 procedure TmnCustomField.CheckIsNil;
 begin
@@ -696,6 +806,11 @@ end;
 procedure TmnCustomField.SaveToStream(Stream: TStream);
 begin
   raise Exception.Create('Not implemented yet');
+end;
+
+function TmnCustomField.ReadIsEmpty: Boolean;
+begin
+  Result := IsExists or (AsString = '');
 end;
 
 function TmnCustomField.ReadIsExists: Boolean;

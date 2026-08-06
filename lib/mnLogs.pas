@@ -127,10 +127,16 @@ procedure InstallEventLog(AEvent: TLogEvent; LogLevel: TLogLevel = lglDebug);
 {$ifdef FPC}
 procedure InstallExceptLog(WithIO: Boolean = False);
 {$endif}
-function IsLogInstalled(LogClass: TClass): Boolean;
+function IsLogInstalled(LogClass: TClass = nil): Boolean;
 procedure ChangeLogLevel(LogClass: TClass; vLogLevel: TLogLevel); overload;
 procedure ChangeLogLevel(LogClass: TClass; vEnabled: Boolean); overload;
 
+type
+  TConsoleColor = (cclUndefined, cclWhite, cclBrightWhite, cclRed, cclBrightRed, cclGreen, cclBrightGreen, cclBlue, cclBrightBlue, cclYellow, cclBrightYellow, cclCyan, cclBrightCyan, cclMagenta, cclBrightMagenta, cclBlack);
+
+procedure InitConsole;
+procedure ConsoleWriteLine(StringColor: TConsoleColor; s: string);
+procedure ConsoleWrite(StringColor: TConsoleColor; s: string);
 
 function Log: TLogDispatcher;
 
@@ -139,6 +145,82 @@ implementation
 var
   FLog: TLogDispatcher = nil;
   FShutdowning: Boolean = False;
+
+{$ifdef MSWINDOWS}
+var
+  ConsoleHandle: THandle;
+  ConsoleInfo: TConsoleScreenBufferInfo;
+  DefaultColor: Word;
+
+function ColorToWord(Color: TConsoleColor):Word;
+const
+  FOREGROUND_WHITE = FOREGROUND_RED or FOREGROUND_GREEN or FOREGROUND_BLUE;
+  FOREGROUND_YELLOW = FOREGROUND_RED or FOREGROUND_GREEN;
+  FOREGROUND_CYAN = FOREGROUND_GREEN or FOREGROUND_BLUE;
+  FOREGROUND_MAGENTA = FOREGROUND_RED or FOREGROUND_BLUE;
+  FOREGROUND_BLACK = 0;
+
+  ColorToID: array[TConsoleColor] of WORD = (0,
+    FOREGROUND_WHITE,
+    FOREGROUND_WHITE or FOREGROUND_INTENSITY,
+    FOREGROUND_RED,
+    FOREGROUND_RED or FOREGROUND_INTENSITY,
+    FOREGROUND_GREEN,
+    FOREGROUND_GREEN or FOREGROUND_INTENSITY,
+    FOREGROUND_BLUE,
+    FOREGROUND_BLUE or FOREGROUND_INTENSITY,
+    FOREGROUND_YELLOW,
+    FOREGROUND_YELLOW or FOREGROUND_INTENSITY,
+    FOREGROUND_CYAN,
+    FOREGROUND_CYAN or FOREGROUND_INTENSITY,
+    FOREGROUND_MAGENTA,
+    FOREGROUND_MAGENTA or FOREGROUND_INTENSITY,
+    FOREGROUND_BLACK
+  );
+begin
+  Result := ColorToID[Color];
+end;
+{$else}
+{$endif}
+
+procedure ConsoleWriteLine(StringColor: TConsoleColor; s: string);
+begin
+  {$ifdef MSWINDOWS}
+  if (ConsoleHandle <> 0) and (StringColor <> cclUndefined) then
+    SetConsoleTextAttribute(ConsoleHandle, ColorToWord(StringColor));
+  {$else}
+  {$endif}
+  WriteLn(s);
+  {$ifdef MSWINDOWS}
+  if (ConsoleHandle <> 0) and (StringColor <> cclUndefined) then
+    SetConsoleTextAttribute(ConsoleHandle, DefaultColor);
+  {$else}
+  {$endif}
+end;
+
+procedure ConsoleWrite(StringColor: TConsoleColor; s: string);
+begin
+  {$ifdef MSWINDOWS}
+  if (ConsoleHandle <> 0) and (StringColor <> cclUndefined) then
+    SetConsoleTextAttribute(ConsoleHandle, ColorToWord(StringColor));
+  {$else}
+  {$endif}
+  Write(s);
+  {$ifdef MSWINDOWS}
+  if (ConsoleHandle <> 0) and (StringColor <> cclUndefined) then
+    SetConsoleTextAttribute(ConsoleHandle, DefaultColor);
+  {$else}
+  {$endif}
+end;
+
+procedure InitConsole;
+begin
+{$ifdef MSWINDOWS}
+  ConsoleHandle := GetStdHandle(STD_OUTPUT_HANDLE);
+  GetConsoleScreenBufferInfo(ConsoleHandle, ConsoleInfo);
+  DefaultColor := ConsoleInfo.wAttributes;
+{$endif}
+end;
 
 procedure TLogDispatcher.AppendToFile(const vFile, vText: utf8string); 
 var
@@ -205,6 +287,8 @@ function IsLogInstalled(LogClass: TClass): Boolean;
 var
   i: Integer;
 begin
+  if LogCLass = nil then
+    exit(log.Count>0);
   for i := 0 to log.Count -1 do
   begin
     if (Log[i] as TLogDispatcherItem).LogObject is LogClass then
@@ -506,6 +590,7 @@ begin
 end;
 
 initialization
+  Log; //Init it needed for multithread
 finalization
   FShutdowning := True;
   FreeAndNil(FLog);
